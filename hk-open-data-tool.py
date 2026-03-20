@@ -306,6 +306,137 @@ def _meta(self) -> dict:
 
 
 # ============================================================
+# HTTP Client
+# ============================================================
+class HTTPClient:
+    # HTTP operations with caching and retries
+
+    def __init__(self, valves: "Valves", cache_dir: str):
+        self.valves = valves
+        self.cache_dir = cache_dir
+        self._client: Optional[httpx.AsyncClient] = None
+        self._mem: Dict[str, Tuple[float, Any]] = {}
+        self._mem_lock = asyncio.Lock()
+
+    def _cache_path(self, name: str) -> Path:
+        return Path(self.cache_dir) / name
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            headers = {"User-Agent": "HongKongOpenDataTool/0.6.0"}
+            self._client = httpx.AsyncClient(
+                timeout=self.valves.http_timeout_s, headers=headers
+            )
+        return self._client
+
+    async def request(
+        self,
+        url: str,
+        params: Optional[dict] = None,
+        *,
+        method: Literal["GET", "POST"] = "GET",
+        json_body: Optional[dict] = None,
+        expect: Literal["json", "text"] = "json",
+        cache_ttl_s: Optional[int] = None,
+        cache_scope: Literal["mem", "disk", "none"] = "none",
+    ) -> Any:
+        # Internal HTTP helper with retries + optional caching
+        params = params or {}
+        ttl = cache_ttl_s if cache_ttl_s is not None else self.valves.cache_ttl_s
+
+        body_key = ""
+        if json_body is not None:
+            try:
+                body_key = json.dumps(json_body, sort_keys=True, ensure_ascii=False)
+            except Exception:
+                body_key = str(json_body)
+
+        key_material = (
+            f"{method} {url}?"
+            + "&".join([f"{k}={params[k]}" for k in sorted(params.keys())])
+            + f" body={body_key}"
+        )
+        key = _sha256(key_material)
+
+        if cache_scope == "mem":
+            async with self._mem_lock:
+                item = self._mem.get(key)
+                if item:
+                    t0, val = item
+                    if (_now_s() - t0) <= ttl:
+                        return val
+                    self._mem.pop(key, None)
+
+        if cache_scope == "disk":
+            p = self._cache_path(f"{key}.json")
+            if p.exists():
+                try:
+                    if (_now_s() - p.stat().st_mtime) <= ttl:
+                        return json.loads(p.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+
+        client = await self._get_client()
+        retries = max(0, int(self.valves.http_retries))
+        last_err: Optional[str] = None
+
+        for attempt in range(retries + 1):
+            try:
+                if method == "POST":
+                    resp = await client.post(url, params=params or None, json=json_body)
+                else:
+                    resp = await client.get(url, params=params or None)
+
+                if resp.status_code == 429 or (500 <= resp.status_code <= 599):
+                    last_err = f"HTTP {resp.status_code}"
+                    if attempt < retries:
+                        await asyncio.sleep(min(0.75 * (2**attempt), 5.0))
+                        continue
+
+                resp.raise_for_status()
+                data = resp.json() if expect == "json" else resp.text
+
+                if cache_scope == "mem":
+                    async with self._mem_lock:
+                        self._mem[key] = (_now_s(), data)
+                elif cache_scope == "disk":
+                    p = self._cache_path(f"{key}.json")
+                    try:
+                        p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+                    except Exception:
+                        pass
+
+                return data
+            except Exception as e:
+                last_err = str(e)
+                if attempt < retries:
+                    await asyncio.sleep(min(0.5 * (2**attempt), 3.0))
+                    continue
+
+        return {
+            "error": "request_failed",
+            "detail": last_err,
+            "url": url,
+            "params": params,
+            "method": method,
+        }
+
+    async def get_json(self, url: str, **kwargs) -> Optional[dict]:
+        # Fetch JSON response
+        r = await self.request(url, expect="json", cache_scope="none", **kwargs)
+        if isinstance(r, dict) and r.get("error"):
+            return None
+        return r if isinstance(r, dict) else None
+
+    async def get_text(self, url: str, **kwargs) -> Optional[str]:
+        # Fetch text response
+        r = await self.request(url, expect="text", cache_scope="none", **kwargs)
+        if isinstance(r, dict) and r.get("error"):
+            return None
+        return r if isinstance(r, str) else None
+
+
+# ============================================================
 # Models / valves
 # ============================================================
 class Valves(BaseModel):
