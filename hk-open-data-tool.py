@@ -31,6 +31,45 @@ import httpx
 from pydantic import BaseModel, Field
 
 # ============================================================
+# Data Classes
+# ============================================================
+@dataclass(frozen=True)
+class StopOcc:
+    route_id: str
+    company: str
+    seq: int
+
+
+@dataclass
+class ETAResult:
+    minutes: Optional[int] = None
+    iso: Optional[str] = None
+    text: Optional[str] = None
+    platform: Optional[str] = None
+    dest: Optional[str] = None
+    remark_en: str = ""
+    remark_zh: str = ""
+
+
+@dataclass
+class Point:
+    lat: float
+    lon: float
+
+
+@dataclass
+class PlanState:
+    cur: str
+    walk: float
+    actual_time: float
+    perceived_cost: float
+    tx: int
+    modes: int
+    legs: list
+    last_was_walk: bool = False
+
+
+# ============================================================
 # Hardcoded, stable endpoints (reduce UI clutter)
 # ============================================================
 HKO_BASE = "https://data.weather.gov.hk/weatherAPI/opendata"
@@ -497,13 +536,6 @@ async def _load_hkbus_db(self) -> Tuple[Optional[dict], Optional[str], Optional[
     return None, None, None
 
 
-@dataclass(frozen=True)
-class _StopOcc:
-    route_id: str
-    company: str
-    seq: int
-
-
 def _build_indices(self, db: dict) -> None:
     """
     Build compact indices for LLM-safe queries:
@@ -522,7 +554,7 @@ def _build_indices(self, db: dict) -> None:
     if not isinstance(self._route_list, dict):
         self._route_list = {}
 
-    stop_to_routes: Dict[str, List[_StopOcc]] = {}
+    stop_to_routes: Dict[str, List[StopOcc]] = {}
     route_company_stops: Dict[Tuple[str, str], List[str]] = {}
     route_company_stop_index: Dict[Tuple[str, str], Dict[str, int]] = {}
 
@@ -542,7 +574,7 @@ def _build_indices(self, db: dict) -> None:
             for i, sid in enumerate(route_company_stops[key]):
                 idx[sid] = i
                 stop_to_routes.setdefault(sid, []).append(
-                    _StopOcc(route_id=rid, company=co, seq=i)
+                    StopOcc(route_id=rid, company=co, seq=i)
                 )
             route_company_stop_index[key] = idx
 
@@ -1011,7 +1043,7 @@ def _inject_ferry_data_to_memory(self, ferry_data: dict) -> None:
         }
 
         for seq, sid in enumerate(stop_ids):
-            occ = _StopOcc(route_id=unified_route_id, company=company, seq=seq)
+            occ = StopOcc(route_id=unified_route_id, company=company, seq=seq)
             if sid not in self._stop_to_routes:
                 self._stop_to_routes[sid] = []
                 self._stop_degree[sid] = 0
@@ -2073,7 +2105,7 @@ class Tools:
         # hkbus caches
         self._stop_list: Dict[str, dict] = {}
         self._route_list: Dict[str, dict] = {}
-        self._stop_to_routes: Dict[str, List[_StopOcc]] = {}
+        self._stop_to_routes: Dict[str, List[StopOcc]] = {}
         self._route_company_stops: Dict[Tuple[str, str], List[str]] = {}
         self._route_company_stop_index: Dict[Tuple[str, str], Dict[str, int]] = {}
         self._stop_degree: Dict[str, int] = {}
