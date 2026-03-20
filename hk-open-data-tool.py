@@ -306,6 +306,175 @@ def _meta(self) -> dict:
 
 
 # ============================================================
+# HKO Client
+# ============================================================
+class HKOClient:
+    BASE = "https://data.weather.gov.hk/weatherAPI/opendata"
+
+    TIDE_STATIONS: Dict[str, str] = {
+        "CCH": "Cheung Chau",
+        "CLK": "Chek Lap Kok",
+        "CMW": "Chi Ma Wan",
+        "KCT": "Kwai Chung",
+        "KLW": "Ko Lau Wan",
+        "LOP": "Lok On Pai",
+        "MWC": "Ma Wan",
+        "QUB": "Quarry Bay",
+        "SPW": "Shek Pik",
+        "TAO": "Tai O",
+        "TBT": "Tsim Bei Tsui",
+        "TMW": "Tai Miu Wan",
+        "TPK": "Tai Po Kau",
+        "WAG": "Waglan Island",
+    }
+
+    CLIMATE_STATIONS: Dict[str, str] = {
+        "CCH": "Cheung Chau",
+        "CWB": "Clear Water Bay",
+        "HKA": "Hong Kong International Airport",
+        "HKO": "Hong Kong Observatory",
+        "HKP": "Hong Kong Park",
+        "HKS": "Wong Chuk Hang",
+        "HPV": "Happy Valley",
+        "JKB": "Tseung Kwan O",
+        "KLT": "Kowloon City",
+        "KP": "King's Park",
+        "KSC": "Kau Sai Chau",
+        "KTG": "Kwun Tong",
+        "LFS": "Lau Fau Shan",
+        "NGP": "Ngong Ping",
+        "PEN": "Peng Chau",
+        "PLC": "Tai Mei Tuk",
+        "SE1": "Kai Tak Runway Park",
+        "SEK": "Shek Kong",
+        "SHA": "Sha Tin",
+        "SKG": "Sai Kung",
+        "SKW": "Shau Kei Wan",
+        "SSH": "Sheung Shui",
+        "SSP": "Sham Shui Po",
+        "STY": "Stanley",
+        "TC": "Tate's Cairn",
+        "TKL": "Ta Kwu Ling",
+        "TMS": "Tai Mo Shan",
+        "TPO": "Tai Po (Conservation Studies Centre)",
+        "TU1": "Tuen Mun Children and Juvenile Home",
+        "TW": "Tsuen Wan Shing Mun Valley",
+        "TWN": "Tsuen Wan",
+        "TY1": "New Tsing Yi Station",
+        "TYW": "Pak Tam Chung (Tsak Yue Wu)",
+        "VP1": "The Peak",
+        "WGL": "Waglan Island",
+        "WLP": "Wetland Park",
+        "WTS": "Wong Tai Sin",
+        "YCT": "Tai Po (Yuan Chau Tsai Park)",
+        "YLP": "Yuen Long Park",
+    }
+
+    RYES_STATIONS: Dict[str, str] = {
+        "CCH": "Cheung Chau",
+        "CLK": "Chek Lap Kok",
+        "EPC": "Ping Chau",
+        "HKO": "Hong Kong Observatory",
+        "HKP": "Hong Kong Park",
+        "HKS": "Wong Chuk Hang",
+        "HPV": "Happy Valley",
+        "JKB": "Tseung Kwan O",
+        "KAT": "Kat O",
+        "KLT": "Kowloon City",
+        "KP": "King's Park",
+        "KTG": "Kwun Tong",
+        "LFS": "Lau Fau Shan",
+        "PLC": "Tai Mei Tuk",
+        "SE1": "Kai Tak Runway Park",
+        "SEK": "Shek Kong",
+        "SHA": "Sha Tin",
+        "SKG": "Sai Kung",
+        "SKW": "Shau Kei Wan",
+        "SSP": "Sham Shui Po",
+        "STK": "Sha Tau Kok",
+        "STY": "Stanley",
+        "SWH": "Sai Wan Ho",
+        "TAP": "Tap Mun",
+        "TBT": "Tsim Bei Tsui",
+        "TKL": "Ta Kwu Ling",
+        "TUN": "Tuen Mun",
+        "TW": "Tsuen Wan Shing Mun Valley",
+        "TWN": "Tsuen Wan Ho Koon",
+        "TY1": "Tsing Yi",
+        "WTS": "Wong Tai Sin",
+        "YCT": "Tai Po",
+        "YLP": "Yuen Long Park",
+        "YNF": "Yuen Ng Fan",
+    }
+
+    def __init__(self, http: "HTTPClient"):
+        self.http = http
+
+    async def _get(self, endpoint: str, params: dict) -> Any:
+        url = f"{self.BASE}/{endpoint}"
+        return await self.http.request(url, params=params, expect="json", cache_scope="mem", cache_ttl_s=60)
+
+    async def _get_text(self, endpoint: str, params: dict) -> Any:
+        url = f"{self.BASE}/{endpoint}"
+        return await self.http.request(url, params=params, expect="text", cache_scope="mem", cache_ttl_s=60)
+
+
+# ============================================================
+# LandsD Client
+# ============================================================
+class LandsDClient:
+    LOCATION_BASE = "https://www.map.gov.hk/gs/api"
+    LOCATION_VERSION = "v1.0.0"
+    TRANSFORM_BASE = "https://www.geodetic.gov.hk/transform/v2/"
+
+    def __init__(self, http: HTTPClient):
+        self.http = http
+
+    async def location_search(self, q: str, limit: int = 10) -> List[dict]:
+        q = (q or "").strip()
+        if not q:
+            return []
+        limit = max(1, min(int(limit), 25))
+        url = f"{self.LOCATION_BASE}/{self.LOCATION_VERSION}/locationSearch"
+        params = {"q": q}
+        j = await self.http.request(url, params=params, expect="json", cache_scope="mem", cache_ttl_s=3600)
+        if isinstance(j, dict) and j.get("error"):
+            return []
+        if not isinstance(j, list):
+            return []
+        return [x for x in j if isinstance(x, dict)][:limit]
+
+    async def transform_hk1980_to_wgs84(self, x: float, y: float) -> Optional[dict]:
+        j = await self.http.request(
+            self.TRANSFORM_BASE,
+            params={"inSys": "hkgrid", "outSys": "wgsgeog", "e": float(x), "n": float(y)},
+            method="GET",
+            expect="json",
+            cache_scope="mem",
+            cache_ttl_s=30 * 24 * 3600,
+        )
+        if not isinstance(j, dict) or j.get("error"):
+            return None
+
+        lat = _coerce_float(
+            j.get("wgsLat") or j.get("wgslat") or j.get("lat") or j.get("latitude")
+        )
+        lon = _coerce_float(
+            j.get("wgsLong")
+            or j.get("wgslong")
+            or j.get("wgsLon")
+            or j.get("wgslon")
+            or j.get("lon")
+            or j.get("long")
+            or j.get("longitude")
+        )
+        if lat is None or lon is None:
+            return None
+
+        return {"lat": float(lat), "lon": float(lon)}
+
+
+# ============================================================
 # HTTP Client
 # ============================================================
 class HTTPClient:
@@ -481,127 +650,8 @@ class Valves(BaseModel):
 
 
 # ============================================================
-# Internal HTTP helper (not a tool)
+# hkbus DB loading (daily JSON) - module-level helpers for TransitDB
 # ============================================================
-async def _request(
-    self,
-    url: str,
-    params: Optional[dict] = None,
-    *,
-    method: Literal["GET", "POST"] = "GET",
-    json_body: Optional[dict] = None,
-    expect: Literal["json", "text"] = "json",
-    cache_ttl_s: Optional[int] = None,
-    cache_scope: Literal["mem", "disk", "none"] = "none",
-) -> Any:
-    """
-    Internal HTTP helper (NOT a tool). Retries + optional caching.
-
-    Notes:
-      - Use GET for most open data endpoints.
-      - Some endpoints (e.g. MTR Bus) require POST with a JSON body.
-      - cache_scope="mem" is recommended for real-time APIs (ETA / next train).
-    """
-    params = params or {}
-    ttl = cache_ttl_s if cache_ttl_s is not None else self.valves.cache_ttl_s
-
-    body_key = ""
-    if json_body is not None:
-        try:
-            body_key = json.dumps(json_body, sort_keys=True, ensure_ascii=False)
-        except Exception:
-            body_key = str(json_body)
-
-    key_material = (
-        f"{method} {url}?"
-        + "&".join([f"{k}={params[k]}" for k in sorted(params.keys())])
-        + f" body={body_key}"
-    )
-    key = _sha256(key_material)
-
-    if cache_scope == "mem":
-        async with self._mem_lock:
-            item = self._mem.get(key)
-            if item:
-                t0, val = item
-                if (_now_s() - t0) <= ttl:
-                    return val
-                self._mem.pop(key, None)
-
-    if cache_scope == "disk":
-        p = _cache_path(self, f"{key}.json")
-        if p.exists():
-            try:
-                if (_now_s() - p.stat().st_mtime) <= ttl:
-                    return json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-
-    client = await _get_client(self)
-    retries = max(0, int(self.valves.http_retries))
-    last_err: Optional[str] = None
-
-    for attempt in range(retries + 1):
-        try:
-            if method == "POST":
-                resp = await client.post(url, params=params or None, json=json_body)
-            else:
-                resp = await client.get(url, params=params or None)
-
-            if resp.status_code == 429 or (500 <= resp.status_code <= 599):
-                last_err = f"HTTP {resp.status_code}"
-                if attempt < retries:
-                    await asyncio.sleep(min(0.75 * (2**attempt), 5.0))
-                    continue
-
-            resp.raise_for_status()
-            data = resp.json() if expect == "json" else resp.text
-
-            if cache_scope == "mem":
-                async with self._mem_lock:
-                    self._mem[key] = (_now_s(), data)
-            elif cache_scope == "disk":
-                p = _cache_path(self, f"{key}.json")
-                try:
-                    p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-                except Exception:
-                    pass
-
-            return data
-        except Exception as e:
-            last_err = str(e)
-            if attempt < retries:
-                await asyncio.sleep(min(0.5 * (2**attempt), 3.0))
-                continue
-
-    return {
-        "error": "request_failed",
-        "detail": last_err,
-        "url": url,
-        "params": params,
-        "method": method,
-    }
-
-
-# ============================================================
-# hkbus DB loading (daily JSON)
-# ============================================================
-async def _download_text(self, url: str) -> Optional[str]:
-    r = await _request(self, url, expect="text", cache_scope="none")
-    if isinstance(r, dict) and r.get("error"):
-        return None
-    if isinstance(r, str):
-        return r
-    return None
-
-
-async def _download_json(self, url: str) -> Optional[dict]:
-    r = await _request(self, url, expect="json", cache_scope="none")
-    if isinstance(r, dict) and r.get("error"):
-        return None
-    if isinstance(r, dict):
-        return r
-    return None
 
 
 async def _load_hkbus_db(self) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
@@ -1278,176 +1328,9 @@ def _nearby_stop_ids(
     return cand[:limit]
 
 
-# ============================================================
-# HKO (Weather Info API)
-# ============================================================
-async def _hko_get(self, endpoint: str, params: dict) -> Any:
-    url = f"{HKO_BASE}/{endpoint}"
-    return await _request(
-        self, url, params=params, expect="json", cache_scope="mem", cache_ttl_s=60
-    )
-
-
-async def _hko_get_text(self, endpoint: str, params: dict) -> Any:
-    """Fetch HKO Open Data endpoints that return plain text (e.g., CSV)."""
-    url = f"{HKO_BASE}/{endpoint}"
-    return await _request(
-        self, url, params=params, expect="text", cache_scope="mem", cache_ttl_s=60
-    )
-
-
-# Station code -> station name maps used by HKO Open Data `opendata.php`.
-# Source: HKO Open Data API Documentation (Version 1.12, Nov 2024).
-HKO_TIDE_STATION_MAP: Dict[str, str] = {
-    "CCH": "Cheung Chau",
-    "CLK": "Chek Lap Kok",
-    "CMW": "Chi Ma Wan",
-    "KCT": "Kwai Chung",
-    "KLW": "Ko Lau Wan",
-    "LOP": "Lok On Pai",
-    "MWC": "Ma Wan",
-    "QUB": "Quarry Bay",
-    "SPW": "Shek Pik",
-    "TAO": "Tai O",
-    "TBT": "Tsim Bei Tsui",
-    "TMW": "Tai Miu Wan",
-    "TPK": "Tai Po Kau",
-    "WAG": "Waglan Island",
-}
-
-HKO_CLIMATE_STATION_MAP: Dict[str, str] = {
-    "CCH": "Cheung Chau",
-    "CWB": "Clear Water Bay",
-    "HKA": "Hong Kong International Airport",
-    "HKO": "Hong Kong Observatory",
-    "HKP": "Hong Kong Park",
-    "HKS": "Wong Chuk Hang",
-    "HPV": "Happy Valley",
-    "JKB": "Tseung Kwan O",
-    "KLT": "Kowloon City",
-    "KP": "King's Park",
-    "KSC": "Kau Sai Chau",
-    "KTG": "Kwun Tong",
-    "LFS": "Lau Fau Shan",
-    "NGP": "Ngong Ping",
-    "PEN": "Peng Chau",
-    "PLC": "Tai Mei Tuk",
-    "SE1": "Kai Tak Runway Park",
-    "SEK": "Shek Kong",
-    "SHA": "Sha Tin",
-    "SKG": "Sai Kung",
-    "SKW": "Shau Kei Wan",
-    "SSH": "Sheung Shui",
-    "SSP": "Sham Shui Po",
-    "STY": "Stanley",
-    "TC": "Tate's Cairn",
-    "TKL": "Ta Kwu Ling",
-    "TMS": "Tai Mo Shan",
-    "TPO": "Tai Po (Conservation Studies Centre)",
-    "TU1": "Tuen Mun Children and Juvenile Home",
-    "TW": "Tsuen Wan Shing Mun Valley",
-    "TWN": "Tsuen Wan",
-    "TY1": "New Tsing Yi Station",
-    "TYW": "Pak Tam Chung (Tsak Yue Wu)",
-    "VP1": "The Peak",
-    "WGL": "Waglan Island",
-    "WLP": "Wetland Park",
-    "WTS": "Wong Tai Sin",
-    "YCT": "Tai Po (Yuan Chau Tsai Park)",
-    "YLP": "Yuen Long Park",
-}
-
-HKO_RYES_STATION_MAP: Dict[str, str] = {
-    "CCH": "Cheung Chau",
-    "CLK": "Chek Lap Kok",
-    "EPC": "Ping Chau",
-    "HKO": "Hong Kong Observatory",
-    "HKP": "Hong Kong Park",
-    "HKS": "Wong Chuk Hang",
-    "HPV": "Happy Valley",
-    "JKB": "Tseung Kwan O",
-    "KAT": "Kat O",
-    "KLT": "Kowloon City",
-    "KP": "King's Park",
-    "KTG": "Kwun Tong",
-    "LFS": "Lau Fau Shan",
-    "PLC": "Tai Mei Tuk",
-    "SE1": "Kai Tak Runway Park",
-    "SEK": "Shek Kong",
-    "SHA": "Sha Tin",
-    "SKG": "Sai Kung",
-    "SKW": "Shau Kei Wan",
-    "SSP": "Sham Shui Po",
-    "STK": "Sha Tau Kok",
-    "STY": "Stanley",
-    "SWH": "Sai Wan Ho",
-    "TAP": "Tap Mun",
-    "TBT": "Tsim Bei Tsui",
-    "TKL": "Ta Kwu Ling",
-    "TUN": "Tuen Mun",
-    "TW": "Tsuen Wan Shing Mun Valley",
-    "TWN": "Tsuen Wan Ho Koon",
-    "TY1": "Tsing Yi",
-    "WTS": "Wong Tai Sin",
-    "YCT": "Tai Po",
-    "YLP": "Yuen Long Park",
-    "YNF": "Yuen Ng Fan",
-}
-
 # Type aliases for nicer tool-call parameter menus (optional but LLM-friendly)
 HKO_LANG = Literal["en", "tc", "sc"]
 HKO_RFORMAT = Literal["json", "csv"]
-
-
-# ============================================================
-# LandsD (Location Search + Transform)
-# ============================================================
-async def _landsd_location_search(self, q: str, limit: int = 10) -> List[dict]:
-    q = (q or "").strip()
-    if not q:
-        return []
-    limit = max(1, min(int(limit), 25))
-    url = f"{LANDSD_LOCATION_BASE}/{LANDSD_LOCATION_VERSION}/locationSearch"
-    params = {"q": q}
-    j = await _request(
-        self, url, params=params, expect="json", cache_scope="mem", cache_ttl_s=3600
-    )
-    if isinstance(j, dict) and j.get("error"):
-        return []
-    if not isinstance(j, list):
-        return []
-    return [x for x in j if isinstance(x, dict)][:limit]
-
-
-async def _landsd_transform_hk1980_to_wgs84(self, x: float, y: float) -> Optional[dict]:
-    j = await _request(
-        self,
-        LANDSD_TRANSFORM_BASE,  # e.g. "https://www.geodetic.gov.hk/transform/v2/"
-        params={"inSys": "hkgrid", "outSys": "wgsgeog", "e": float(x), "n": float(y)},
-        method="GET",
-        expect="json",
-        cache_scope="mem",
-        cache_ttl_s=30 * 24 * 3600,
-    )
-    if not isinstance(j, dict) or j.get("error"):
-        return None
-
-    lat = _coerce_float(
-        j.get("wgsLat") or j.get("wgslat") or j.get("lat") or j.get("latitude")
-    )
-    lon = _coerce_float(
-        j.get("wgsLong")
-        or j.get("wgslong")
-        or j.get("wgsLon")
-        or j.get("wgslon")
-        or j.get("lon")
-        or j.get("long")
-        or j.get("longitude")
-    )
-    if lat is None or lon is None:
-        return None
-
-    return {"lat": float(lat), "lon": float(lon)}
 
 
 # ============================================================
