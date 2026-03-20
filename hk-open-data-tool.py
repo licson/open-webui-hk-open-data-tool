@@ -70,34 +70,37 @@ class PlanState:
 
 
 # ============================================================
-# Hardcoded, stable endpoints (reduce UI clutter)
+# Constants & Endpoints
 # ============================================================
+
+# HKO Endpoints
 HKO_BASE = "https://data.weather.gov.hk/weatherAPI/opendata"
 
+# LandsD Endpoints
 LANDSD_LOCATION_BASE = "https://www.map.gov.hk/gs/api"
 LANDSD_LOCATION_VERSION = "v1.0.0"
 LANDSD_TRANSFORM_BASE = "https://www.geodetic.gov.hk/transform/v2/"
 
-# hkbus static DB (daily)
+# Transit DB Sources
 HKBUS_PRIMARY_BASE = "https://data.hkbus.app"
 HKBUS_FALLBACK_BASE = "https://hkbus.github.io/hk-bus-crawling"
 HKBUS_DB_JSON = "routeFareList.min.json"
 HKBUS_DB_MD5 = "routeFareList.md5"
 HKBUS_VERSIONS_JSON = "0versions.json"
 
-# Real-time ETA endpoints
+# Real-time ETA Endpoints
 KMB_ETA_BASE = "https://data.etabus.gov.hk/v1/transport/kmb"
 CTB_ETA_BASE = "https://rt.data.gov.hk/v2/transport/citybus"
 GMB_ETA_BASE = "https://data.etagmb.gov.hk"
-
-# Rail + ferry real-time endpoints (authoritative / operator-provided)
 MTR_TRAIN_BASE = "https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php"
 MTR_LRT_BASE = "https://rt.data.gov.hk/v1/transport/mtr/lrt/getSchedule"
 MTR_BUS_BASE = "https://rt.data.gov.hk/v1/transport/mtr/bus/getSchedule"
-
 SUNFERRY_BASE = "https://www.sunferry.com.hk"
 HKKF_BASE = "https://www.hkkfeta.com"
 FORTUNEFERRY_BASE = "https://www.hongkongwatertaxi.com.hk"
+
+# Timezone
+HK_TZ = timezone(timedelta(hours=8))
 
 
 # ============================================================
@@ -213,9 +216,6 @@ def _eta_minutes(eta_iso: Optional[str]) -> Optional[int]:
     if diff < -120:
         return None
     return max(0, int(round(diff / 60.0)))
-
-
-HK_TZ = timezone(timedelta(hours=8))
 
 
 def _parse_hk_dt(s: str) -> Optional[datetime]:
