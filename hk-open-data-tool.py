@@ -128,16 +128,12 @@ def _normalize_text(s: str) -> str:
 # Transit operator normalization
 # ============================================================
 def _norm_co(co: Any) -> str:
-    """Normalize hkbus `co` values for internal matching (case-insensitive)."""
+    # Normalize hkbus co values for internal matching
     s = str(co or "").strip().lower()
-    # hk-bus-crawling uses `minibus` while some tooling uses `gmb`.
-    # Canonicalize to `gmb` so ETA + routing treat them as one.
     if s == "minibus":
         return "gmb"
-    # Some datasets/tools use `mtr-bus` for MTR feeder buses; canonicalize to `lrtfeeder`.
     if s in {"mtr-bus", "mtr_bus", "mtrbus"}:
         return "lrtfeeder"
-    # Tolerate a couple of common spellings.
     if s in {"light_rail", "light-rail", "light rail"}:
         return "lightrail"
     return s
@@ -219,7 +215,7 @@ def _eta_minutes(eta_iso: Optional[str]) -> Optional[int]:
 
 
 def _parse_hk_dt(s: str) -> Optional[datetime]:
-    """Parse MTR-style datetime 'YYYY-MM-DD HH:MM:SS' as Hong Kong time (+08:00)."""
+    # Parse MTR-style datetime as Hong Kong time
     if not s or not isinstance(s, str):
         return None
     s = s.strip()
@@ -231,7 +227,7 @@ def _parse_hk_dt(s: str) -> Optional[datetime]:
 
 
 def _minutes_from_compact_text(s: str) -> Optional[int]:
-    """Extract minutes from strings like '5 min', '5 分鐘', '10 minutes' (best-effort)."""
+    # Extract minutes from strings like '5 min', '5 分鐘'
     if not s or not isinstance(s, str):
         return None
     m = re.search(r"(\d+)", s)
@@ -244,7 +240,7 @@ def _minutes_from_compact_text(s: str) -> Optional[int]:
 
 
 def _eta_minutes_from_hhmm(now_hk: datetime, hhmm: str) -> Optional[int]:
-    """For ferry APIs that return only HH:MM, compute minutes from now (HK time)."""
+    # For ferry APIs that return only HH:MM, compute minutes from now
     if not hhmm or not isinstance(hhmm, str):
         return None
     m = re.match(r"^(\d{1,2}):(\d{2})$", hhmm.strip())
