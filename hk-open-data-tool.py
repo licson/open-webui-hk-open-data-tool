@@ -207,19 +207,19 @@ HKO_RYES_STATION_MAP = HKO_RYES_STATIONS
 # ============================================================
 # Small helpers (module-level; NOT exposed as tools)
 # ============================================================
-def _now_s() -> float:
+def now_s() -> float:
     return time.time()
 
 
-def _safe_mkdir(path: Path) -> None:
+def safe_mkdir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def _sha256(s: str) -> str:
+def sha256(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
-def _normalize_text(s: str) -> str:
+def normalize_text(s: str) -> str:
     s = (s or "").lower().strip()
     s = re.sub(r"\s+", " ", s)
     return s
@@ -228,7 +228,7 @@ def _normalize_text(s: str) -> str:
 # ============================================================
 # Transit operator normalization
 # ============================================================
-def _norm_co(co: Any) -> str:
+def norm_co(co: Any) -> str:
     # Normalize hkbus co values for internal matching
     s = str(co or "").strip().lower()
     if s == "minibus":
@@ -264,11 +264,11 @@ COMPANY_MODE: Dict[str, str] = {
 }
 
 
-def _mode_of_company(co_norm: str) -> str:
+def mode_of_company(co_norm: str) -> str:
     return COMPANY_MODE.get(co_norm, "bus")
 
 
-def _coerce_float(v: Any) -> Optional[float]:
+def coerce_float(v: Any) -> Optional[float]:
     try:
         if v is None:
             return None
@@ -281,7 +281,7 @@ def _coerce_float(v: Any) -> Optional[float]:
     return None
 
 
-def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371008.8
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     dphi = math.radians(lat2 - lat1)
@@ -293,7 +293,7 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(math.sqrt(a))
 
 
-def _parse_iso(iso_str: str) -> Optional[datetime]:
+def parse_iso(iso_str: str) -> Optional[datetime]:
     if not iso_str or not isinstance(iso_str, str):
         return None
     try:
@@ -302,8 +302,8 @@ def _parse_iso(iso_str: str) -> Optional[datetime]:
         return None
 
 
-def _eta_minutes(eta_iso: Optional[str]) -> Optional[int]:
-    dt = _parse_iso(eta_iso) if eta_iso else None
+def eta_minutes(eta_iso: Optional[str]) -> Optional[int]:
+    dt = parse_iso(eta_iso) if eta_iso else None
     if not dt:
         return None
     now = datetime.now(timezone.utc)
@@ -315,7 +315,7 @@ def _eta_minutes(eta_iso: Optional[str]) -> Optional[int]:
     return max(0, int(round(diff / 60.0)))
 
 
-def _parse_hk_dt(s: str) -> Optional[datetime]:
+def parse_hk_dt(s: str) -> Optional[datetime]:
     # Parse MTR-style datetime as Hong Kong time
     if not s or not isinstance(s, str):
         return None
@@ -327,7 +327,7 @@ def _parse_hk_dt(s: str) -> Optional[datetime]:
         return None
 
 
-def _minutes_from_compact_text(s: str) -> Optional[int]:
+def minutes_from_compact_text(s: str) -> Optional[int]:
     # Extract minutes from strings like '5 min', '5 分鐘'
     if not s or not isinstance(s, str):
         return None
@@ -340,7 +340,7 @@ def _minutes_from_compact_text(s: str) -> Optional[int]:
         return None
 
 
-def _eta_minutes_from_hhmm(now_hk: datetime, hhmm: str) -> Optional[int]:
+def eta_minutes_from_hhmm(now_hk: datetime, hhmm: str) -> Optional[int]:
     # For ferry APIs that return only HH:MM, compute minutes from now
     if not hhmm or not isinstance(hhmm, str):
         return None
@@ -359,11 +359,11 @@ def _eta_minutes_from_hhmm(now_hk: datetime, hhmm: str) -> Optional[int]:
     return max(0, int(round(diff / 60.0)))
 
 
-def _cursor_make(qkey: str, offset: int) -> str:
+def cursor_make(qkey: str, offset: int) -> str:
     return f"{qkey}:{offset}"
 
 
-def _cursor_parse(cursor: Optional[str]) -> Tuple[str, int]:
+def cursor_parse(cursor: Optional[str]) -> Tuple[str, int]:
     if not cursor:
         return "", 0
     try:
@@ -373,83 +373,15 @@ def _cursor_parse(cursor: Optional[str]) -> Tuple[str, int]:
         return "", 0
 
 
-def _limit_items(items: list, offset: int, limit: int) -> Tuple[list, Optional[str]]:
+def limit_items(items: list, offset: int, limit: int) -> Tuple[list, Optional[str]]:
     limit = max(1, min(limit, 50))
     sliced = items[offset : offset + limit]
     next_cursor = None
     if offset + limit < len(items):
-        next_cursor = _cursor_make("q", offset + limit)
+        next_cursor = cursor_make("q", offset + limit)
     return sliced, next_cursor
 
 
-def _cache_path(self, name: str) -> Path:
-    return Path(self.valves.cache_dir) / name
-
-
-async def _get_client(self) -> httpx.AsyncClient:
-    if getattr(self, "_client", None) is None:
-        headers = {"User-Agent": "HongKongOpenDataTool/0.6.0"}
-        self._client = httpx.AsyncClient(
-            timeout=self.valves.http_timeout_s, headers=headers
-        )
-    return self._client
-
-
-def _meta(self) -> dict:
-    return {
-        "tool": "Hong Kong Open Data",
-        "version": "0.6.0",
-        "cached_db": bool(getattr(self, "_db_loaded", False)),
-        "db_source": getattr(self, "_db_source", None),
-        "db_md5": getattr(self, "_db_md5", None),
-        "ts": int(_now_s()),
-    }
-
-
-async def _request(
-    self,
-    url: str,
-    params: Optional[dict] = None,
-    *,
-    method: Literal["GET", "POST"] = "GET",
-    json_body: Optional[dict] = None,
-    expect: Literal["json", "text"] = "json",
-    cache_ttl_s: Optional[int] = None,
-    cache_scope: Literal["mem", "disk", "none"] = "none",
-) -> Any:
-    return await self.http.request(
-        url,
-        params=params,
-        method=method,
-        json_body=json_body,
-        expect=expect,
-        cache_ttl_s=cache_ttl_s,
-        cache_scope=cache_scope,
-    )
-
-
-async def _download_json(self, url: str) -> Optional[dict]:
-    return await self.http.get_json(url)
-
-
-async def _download_text(self, url: str) -> Optional[str]:
-    return await self.http.get_text(url)
-
-
-async def _hko_get(self, endpoint: str, params: dict) -> Any:
-    return await self.hko._get(endpoint, params)
-
-
-async def _hko_get_text(self, endpoint: str, params: dict) -> Any:
-    return await self.hko._get_text(endpoint, params)
-
-
-async def _landsd_location_search(self, q: str, limit: int = 10) -> List[dict]:
-    return await self.landsd.location_search(q, limit)
-
-
-async def _landsd_transform_hk1980_to_wgs84(self, x: float, y: float) -> Optional[dict]:
-    return await self.landsd.transform_hk1980_to_wgs84(x, y)
 
 
 # ============================================================
@@ -603,10 +535,10 @@ class LandsDClient:
         if not isinstance(j, dict) or j.get("error"):
             return None
 
-        lat = _coerce_float(
+        lat = coerce_float(
             j.get("wgsLat") or j.get("wgslat") or j.get("lat") or j.get("latitude")
         )
-        lon = _coerce_float(
+        lon = coerce_float(
             j.get("wgsLong")
             or j.get("wgslong")
             or j.get("wgsLon")
@@ -672,14 +604,14 @@ class HTTPClient:
             + "&".join([f"{k}={params[k]}" for k in sorted(params.keys())])
             + f" body={body_key}"
         )
-        key = _sha256(key_material)
+        key = sha256(key_material)
 
         if cache_scope == "mem":
             async with self._mem_lock:
                 item = self._mem.get(key)
                 if item:
                     t0, val = item
-                    if (_now_s() - t0) <= ttl:
+                    if (now_s() - t0) <= ttl:
                         return val
                     self._mem.pop(key, None)
 
@@ -687,7 +619,7 @@ class HTTPClient:
             p = self._cache_path(f"{key}.json")
             if p.exists():
                 try:
-                    if (_now_s() - p.stat().st_mtime) <= ttl:
+                    if (now_s() - p.stat().st_mtime) <= ttl:
                         return json.loads(p.read_text(encoding="utf-8"))
                 except Exception:
                     pass
@@ -714,7 +646,7 @@ class HTTPClient:
 
                 if cache_scope == "mem":
                     async with self._mem_lock:
-                        self._mem[key] = (_now_s(), data)
+                        self._mem[key] = (now_s(), data)
                 elif cache_scope == "disk":
                     p = self._cache_path(f"{key}.json")
                     try:
@@ -836,6 +768,9 @@ class TransitDB:
             "db_md5": self._db_md5,
         }
 
+    async def lrt_next_trains(self, station_id: int) -> List[dict]:
+        return await self.fetch_lrt_next_trains(station_id)
+
     async def ensure_loaded(self) -> None:
         if self._db_loaded:
             return
@@ -857,13 +792,13 @@ class TransitDB:
 
     async def _load_hkbus_db(self) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
         cache_dir = Path(self.valves.cache_dir)
-        _safe_mkdir(cache_dir)
+        safe_mkdir(cache_dir)
         db_path = cache_dir / HKBUS_DB_JSON
         md5_path = cache_dir / HKBUS_DB_MD5
 
         if db_path.exists() and md5_path.exists():
             try:
-                if (_now_s() - db_path.stat().st_mtime) <= self.valves.cache_ttl_s:
+                if (now_s() - db_path.stat().st_mtime) <= self.valves.cache_ttl_s:
                     j = json.loads(db_path.read_text(encoding="utf-8"))
                     md5 = md5_path.read_text(encoding="utf-8").strip()
                     return j, "disk", md5
@@ -925,7 +860,7 @@ class TransitDB:
             for co_raw, seq in stops.items():
                 if not isinstance(seq, list):
                     continue
-                co = _norm_co(co_raw)
+                co = norm_co(co_raw)
                 key = (rid, co)
                 route_company_stops[key] = [str(x) for x in seq if isinstance(x, str)]
                 idx = {}
@@ -949,8 +884,8 @@ class TransitDB:
             if not isinstance(s, dict):
                 continue
             loc = s.get("location") or {}
-            lat = _coerce_float(loc.get("lat"))
-            lon = _coerce_float(loc.get("lng"))
+            lat = coerce_float(loc.get("lat"))
+            lon = coerce_float(loc.get("lng"))
             if lat is None or lon is None:
                 continue
             gx = int(float(lat) / cell_size)
@@ -963,8 +898,8 @@ class TransitDB:
         transfer_edges: Dict[str, List[Tuple[str, float]]] = {}
         for sid, s in self._stop_list.items():
             loc = s.get("location") or {}
-            lat = _coerce_float(loc.get("lat"))
-            lon = _coerce_float(loc.get("lng"))
+            lat = coerce_float(loc.get("lat"))
+            lon = coerce_float(loc.get("lng"))
             if lat is None or lon is None:
                 continue
 
@@ -979,11 +914,11 @@ class TransitDB:
                             continue
                         s2 = self._stop_list.get(sid2, {})
                         loc2 = s2.get("location") or {}
-                        lat2 = _coerce_float(loc2.get("lat"))
-                        lon2 = _coerce_float(loc2.get("lng"))
+                        lat2 = coerce_float(loc2.get("lat"))
+                        lon2 = coerce_float(loc2.get("lng"))
                         if lat2 is None or lon2 is None:
                             continue
-                        dist = _haversine_m(float(lat), float(lon), float(lat2), float(lon2))
+                        dist = haversine_m(float(lat), float(lon), float(lat2), float(lon2))
                         if dist <= 800.0:
                             near.append((sid2, dist))
 
@@ -995,7 +930,7 @@ class TransitDB:
     async def load_and_merge_gtfs_ferries(self) -> None:
         cache_path = Path(self.valves.cache_dir) / "hk_gtfs_ferries_cache_v9.json"
 
-        if cache_path.exists() and (_now_s() - cache_path.stat().st_mtime) < 86400:
+        if cache_path.exists() and (now_s() - cache_path.stat().st_mtime) < 86400:
             try:
                 with open(cache_path, "r", encoding="utf-8") as f:
                     ferry_data = json.load(f)
@@ -1031,8 +966,8 @@ class TransitDB:
             co_list = r_info.get("co", [])
             if not co_list:
                 continue
-            co = _norm_co(co_list[0])
-            if _mode_of_company(co) == "ferry" or co in self.GTFS_AGENCY_MAP.values():
+            co = norm_co(co_list[0])
+            if mode_of_company(co) == "ferry" or co in self.GTFS_AGENCY_MAP.values():
                 route_name = str(r_info.get("route", ""))
                 norm_name = normalize_route_name(route_name)
                 existing_ferry_fingerprints.add((co, norm_name))
@@ -1313,8 +1248,8 @@ class TransitDB:
         if not isinstance(s, dict):
             return None
         loc = s.get("location") or {}
-        lat = _coerce_float(loc.get("lat"))
-        lon = _coerce_float(loc.get("lng"))
+        lat = coerce_float(loc.get("lat"))
+        lon = coerce_float(loc.get("lng"))
         name = s.get("name") or {}
         name_en = str(name.get("en", "") or "")
         name_zh = str(name.get("zh", "") or "")
@@ -1344,11 +1279,11 @@ class TransitDB:
         if not isinstance(s, dict):
             return None
         loc = s.get("location") or {}
-        lat1 = _coerce_float(loc.get("lat"))
-        lon1 = _coerce_float(loc.get("lng"))
+        lat1 = coerce_float(loc.get("lat"))
+        lon1 = coerce_float(loc.get("lng"))
         if lat1 is None or lon1 is None:
             return None
-        return _haversine_m(float(lat1), float(lon1), float(lat2), float(lon2))
+        return haversine_m(float(lat1), float(lon1), float(lat2), float(lon2))
 
     def nearby_stop_ids(self, lat: float, lon: float, radius_m: float, limit: int = 30) -> List[Tuple[str, float]]:
         cell = self._grid_cell
@@ -1468,7 +1403,7 @@ class TransitDB:
                         mins = int(str(t.get("ttnt")).strip())
                 except Exception:
                     mins = None
-                dt = _parse_hk_dt(str(t.get("time", "") or ""))
+                dt = parse_hk_dt(str(t.get("time", "") or ""))
                 iso = dt.isoformat() if dt else None
                 out.append({"direction": d, "dest": t.get("dest"), "platform": t.get("plat"), "minutes": mins, "iso": iso, "seq": t.get("seq"), "source": t.get("source")})
         out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"]), str(x.get("direction") or "")))
@@ -1495,7 +1430,7 @@ class TransitDB:
                 if not isinstance(r, dict):
                     continue
                 time_en = str(r.get("time_en", "") or "")
-                mins = _minutes_from_compact_text(time_en)
+                mins = minutes_from_compact_text(time_en)
                 out.append({"platform": pid, "route_no": r.get("route_no"), "dest_en": r.get("dest_en"), "dest_zh": r.get("dest_ch"), "minutes": mins, "text": time_en or None, "train_length": r.get("train_length"), "arrival_departure": r.get("arrival_departure")})
         out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"]), str(x.get("route_no") or "")))
         return out
@@ -1551,7 +1486,7 @@ class TransitDB:
         if not isinstance(data, list):
             return []
         ts = j.get("generated_timestamp") or (data[0].get("date_timestamp") if data and isinstance(data[0], dict) else None)
-        now_dt = _parse_iso(str(ts or "")) or datetime.now(HK_TZ)
+        now_dt = parse_iso(str(ts or "")) or datetime.now(HK_TZ)
         if now_dt.tzinfo is None:
             now_dt = now_dt.replace(tzinfo=HK_TZ)
         now_hk = now_dt.astimezone(HK_TZ)
@@ -1562,7 +1497,7 @@ class TransitDB:
             if not isinstance(r, dict):
                 continue
             eta_hhmm = str(r.get("eta", "") or "")
-            mins = _eta_minutes_from_hhmm(now_hk, eta_hhmm)
+            mins = eta_minutes_from_hhmm(now_hk, eta_hhmm)
             rmk = r.get("rmk_en") if lang0 == "en" else r.get("rmk_tc") if lang0 in ("tc", "zh") else r.get("rmk_sc")
             out.append({"minutes": mins, "iso": None, "eta_hhmm": eta_hhmm or None, "depart_hhmm": r.get("depart_time"), "route_en": r.get("route_en"), "route_tc": r.get("route_tc"), "remark": rmk, "vesselcode": r.get("vesselcode")})
         out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
@@ -1579,7 +1514,7 @@ class TransitDB:
         if not isinstance(data, list):
             return []
         ts = j.get("generated_timestamp") or (data[0].get("date_timestamp") if data and isinstance(data[0], dict) else None)
-        now_dt = _parse_iso(str(ts or "")) or datetime.now(HK_TZ)
+        now_dt = parse_iso(str(ts or "")) or datetime.now(HK_TZ)
         if now_dt.tzinfo is None:
             now_dt = now_dt.replace(tzinfo=HK_TZ)
         now_hk = now_dt.astimezone(HK_TZ)
@@ -1590,7 +1525,7 @@ class TransitDB:
             if not isinstance(r, dict):
                 continue
             eta_hhmm = str(r.get("eta", "") or "")
-            mins = _eta_minutes_from_hhmm(now_hk, eta_hhmm)
+            mins = eta_minutes_from_hhmm(now_hk, eta_hhmm)
             rmk = r.get("rmk_en") if lang0 == "en" else r.get("rmk_tc") if lang0 in ("tc", "zh") else r.get("rmk_sc")
             out.append({"minutes": mins, "iso": None, "eta_hhmm": eta_hhmm or None, "depart_hhmm": r.get("depart_time"), "route_en": r.get("route_en"), "route_tc": r.get("route_tc"), "remark": rmk, "vesselcode": r.get("vesselcode")})
         out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
@@ -1621,7 +1556,7 @@ class TransitDB:
             if not isinstance(r, dict):
                 continue
             iso = r.get("ETA")
-            mins = _eta_minutes(str(iso)) if iso else None
+            mins = eta_minutes(str(iso)) if iso else None
             out.append({"minutes": mins, "iso": iso, "route_id": r.get("route_id"), "direction": r.get("direction"), "session_time": r.get("session_time"), "date": r.get("date")})
         out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
         return out
@@ -1631,7 +1566,7 @@ class TransitDB:
         if not isinstance(r, dict):
             return []
 
-        co = _norm_co(company)
+        co = norm_co(company)
         route_no = str(r.get("route", "") or "")
         bounds = r.get("bound", {}) if isinstance(r.get("bound"), dict) else {}
         bound = str(bounds.get(co, bounds.get(co.lower(), "")) or "")
@@ -1643,16 +1578,16 @@ class TransitDB:
             arr = await self.fetch_kmb_etas(board_stop_id, route_no, bound, board_seq, observed_st)
             for e in arr[:limit_etas]:
                 eta_iso = e.get("eta")
-                mins = _eta_minutes(eta_iso)
-                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "kmb", "mode": _mode_of_company("kmb"), "direction": bound or None, "service_type_used": 1, "eta": {"iso": eta_iso, "minutes": mins, "text": (f"{mins} min" if mins is not None else None)}, "remark": {"en": e.get("rmk_en") or "", "zh": e.get("rmk_tc") or ""}})
+                mins = eta_minutes(eta_iso)
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "kmb", "mode": mode_of_company("kmb"), "direction": bound or None, "service_type_used": 1, "eta": {"iso": eta_iso, "minutes": mins, "text": (f"{mins} min" if mins is not None else None)}, "remark": {"en": e.get("rmk_en") or "", "zh": e.get("rmk_tc") or ""}})
             return out
 
         if co == "ctb":
             arr = await self.fetch_ctb_etas(board_stop_id, route_no, bound, board_seq)
             for e in arr[:limit_etas]:
                 eta_iso = e.get("eta")
-                mins = _eta_minutes(eta_iso)
-                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "ctb", "mode": _mode_of_company("ctb"), "direction": e.get("dir") or bound or None, "service_type_used": 1, "eta": {"iso": eta_iso, "minutes": mins, "text": (f"{mins} min" if mins is not None else None)}, "remark": {"en": e.get("rmk_en") or "", "zh": e.get("rmk_tc") or ""}})
+                mins = eta_minutes(eta_iso)
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "ctb", "mode": mode_of_company("ctb"), "direction": e.get("dir") or bound or None, "service_type_used": 1, "eta": {"iso": eta_iso, "minutes": mins, "text": (f"{mins} min" if mins is not None else None)}, "remark": {"en": e.get("rmk_en") or "", "zh": e.get("rmk_tc") or ""}})
             return out
 
         if co == "gmb":
@@ -1662,8 +1597,8 @@ class TransitDB:
             arr = await self.fetch_gmb_etas(board_stop_id, gtfs_id, bound, board_seq)
             for e in arr[:limit_etas]:
                 eta_iso = e.get("eta") or None
-                mins = _eta_minutes(eta_iso) if eta_iso else None
-                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "gmb", "mode": _mode_of_company("gmb"), "direction": bound or None, "service_type_used": 1, "eta": {"iso": eta_iso, "minutes": mins, "text": (f"{mins} min" if mins is not None else None)}, "remark": {"en": e.get("rmk_en") or "", "zh": e.get("rmk_tc") or ""}})
+                mins = eta_minutes(eta_iso) if eta_iso else None
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "gmb", "mode": mode_of_company("gmb"), "direction": bound or None, "service_type_used": 1, "eta": {"iso": eta_iso, "minutes": mins, "text": (f"{mins} min" if mins is not None else None)}, "remark": {"en": e.get("rmk_en") or "", "zh": e.get("rmk_tc") or ""}})
             return out
 
         if co == "mtr":
@@ -1674,7 +1609,7 @@ class TransitDB:
                 dest = t.get("dest")
                 plat = t.get("platform")
                 msg = t.get("message") or ""
-                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "mtr", "mode": _mode_of_company("mtr"), "direction": t.get("direction"), "service_type_used": 1, "eta": {"iso": iso, "minutes": mins, "text": (f"{mins} min" if isinstance(mins, int) else None)}, "platform": plat, "dest": dest, "remark": {"en": msg, "zh": msg}, "url": t.get("url")})
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "mtr", "mode": mode_of_company("mtr"), "direction": t.get("direction"), "service_type_used": 1, "eta": {"iso": iso, "minutes": mins, "text": (f"{mins} min" if isinstance(mins, int) else None)}, "platform": plat, "dest": dest, "remark": {"en": msg, "zh": msg}, "url": t.get("url")})
             return out
 
         if co == "lightrail":
@@ -1691,7 +1626,7 @@ class TransitDB:
             for t in filtered[:limit_etas]:
                 mins = t.get("minutes")
                 text = t.get("text")
-                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "lightrail", "mode": _mode_of_company("lightrail"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": text}, "platform": t.get("platform"), "dest": t.get("dest_en"), "remark": {"en": "", "zh": ""}})
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "lightrail", "mode": mode_of_company("lightrail"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": text}, "platform": t.get("platform"), "dest": t.get("dest_en"), "remark": {"en": "", "zh": ""}})
             return out
 
         if co == "lrtfeeder":
@@ -1699,21 +1634,21 @@ class TransitDB:
             for b in buses[:limit_etas]:
                 mins = b.get("minutes")
                 txt = b.get("text")
-                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "lrtfeeder", "mode": _mode_of_company("lrtfeeder"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": txt}, "remark": {"en": str(b.get("remark") or ""), "zh": str(b.get("remark") or "")}})
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "lrtfeeder", "mode": mode_of_company("lrtfeeder"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": txt}, "remark": {"en": str(b.get("remark") or ""), "zh": str(b.get("remark") or "")}})
             return out
 
         if co == "sunferry":
             trips = await self.fetch_sunferry_next_trip(route_no, lang=lang)
             for t in trips[:limit_etas]:
                 mins = t.get("minutes")
-                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "sunferry", "mode": _mode_of_company("sunferry"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": (t.get("eta_hhmm") or None)}, "remark": {"en": str(t.get("remark") or ""), "zh": str(t.get("remark") or "")}})
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "sunferry", "mode": mode_of_company("sunferry"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": (t.get("eta_hhmm") or None)}, "remark": {"en": str(t.get("remark") or ""), "zh": str(t.get("remark") or "")}})
             return out
 
         if co == "fortuneferry":
             trips = await self.fetch_fortuneferry_next_trip(route_no, lang=lang)
             for t in trips[:limit_etas]:
                 mins = t.get("minutes")
-                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "fortuneferry", "mode": _mode_of_company("fortuneferry"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": (t.get("eta_hhmm") or None)}, "remark": {"en": str(t.get("remark") or ""), "zh": str(t.get("remark") or "")}})
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "fortuneferry", "mode": mode_of_company("fortuneferry"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": (t.get("eta_hhmm") or None)}, "remark": {"en": str(t.get("remark") or ""), "zh": str(t.get("remark") or "")}})
             return out
 
         if co == "hkkf":
@@ -1722,1440 +1657,429 @@ class TransitDB:
             for t in trips[:limit_etas]:
                 mins = t.get("minutes")
                 iso = t.get("iso")
-                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "hkkf", "mode": _mode_of_company("hkkf"), "direction": t.get("direction") or direction, "service_type_used": 1, "eta": {"iso": iso, "minutes": mins, "text": (f"{mins} min" if isinstance(mins, int) else None)}, "remark": {"en": "", "zh": ""}})
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "hkkf", "mode": mode_of_company("hkkf"), "direction": t.get("direction") or direction, "service_type_used": 1, "eta": {"iso": iso, "minutes": mins, "text": (f"{mins} min" if isinstance(mins, int) else None)}, "remark": {"en": "", "zh": ""}})
             return out
 
         return out
 
 
 # ============================================================
-# hkbus DB loading (daily JSON) - module-level helpers (DEPRECATED: use TransitDB)
+# Trip Planner
 # ============================================================
+class TripPlanner:
+    WALK_SPEED_M_PER_MIN = 80.0
+    WALK_WEIGHT = 1.5
+    WAIT_WEIGHT = 1.5
+    RIDE_WEIGHT = 1.0
+    MAX_EXPANSIONS = 150000
 
+    def __init__(self, transit: TransitDB, landsd: LandsDClient, valves: "Valves"):
+        self.transit = transit
+        self.landsd = landsd
+        self.valves = valves
 
-async def _load_hkbus_db(self) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
-    """
-    Load hkbus DB from primary, then fallback. Cache DB to disk with MD5 for quick reload.
-    """
-    cache_dir = Path(self.valves.cache_dir)
-    _safe_mkdir(cache_dir)
-    db_path = cache_dir / HKBUS_DB_JSON
-    md5_path = cache_dir / HKBUS_DB_MD5
+    def transfer_penalty(self, from_mode: Optional[str], to_mode: str) -> float:
+        if not from_mode:
+            return 0.0
+        if from_mode == "rail" and to_mode == "rail":
+            return 3.0
+        if "bus" in from_mode and "bus" in to_mode:
+            return 10.0
+        if "ferry" in from_mode or "ferry" in to_mode:
+            return 6.0
+        return 8.0
 
-    # Fast path: if cached exists and within TTL, use it
-    if db_path.exists() and md5_path.exists():
-        try:
-            if (_now_s() - db_path.stat().st_mtime) <= self.valves.cache_ttl_s:
-                j = json.loads(db_path.read_text(encoding="utf-8"))
-                md5 = md5_path.read_text(encoding="utf-8").strip()
-                return j, "disk", md5
-        except Exception:
-            pass
-
-    async def try_source(base: str) -> Tuple[Optional[dict], Optional[str]]:
-        md5 = await _download_text(self, f"{base}/{HKBUS_DB_MD5}")
-        if not md5:
-            return None, None
-        db = await _download_json(self, f"{base}/{HKBUS_DB_JSON}")
-        if not db:
-            return None, None
-        return db, md5.strip()
-
-    # Try primary then fallback
-    db, md5 = await try_source(self.valves.hkbus_primary_base)
-    source = self.valves.hkbus_primary_base
-    if not db:
-        db, md5 = await try_source(self.valves.hkbus_fallback_base)
-        source = self.valves.hkbus_fallback_base
-
-    if db and md5:
-        try:
-            db_path.write_text(json.dumps(db, ensure_ascii=False), encoding="utf-8")
-            md5_path.write_text(md5, encoding="utf-8")
-        except Exception:
-            pass
-        return db, source, md5
-
-    # fallback to stale disk if any
-    if db_path.exists():
-        try:
-            j = json.loads(db_path.read_text(encoding="utf-8"))
-            md5 = (
-                md5_path.read_text(encoding="utf-8").strip()
-                if md5_path.exists()
-                else None
-            )
-            return j, "disk_stale", md5
-        except Exception:
-            pass
-
-    return None, None, None
-
-
-def _build_indices(self, db: dict) -> None:
-    """
-    Build compact indices for LLM-safe queries:
-      - stop_id -> occurrences (route_id, company, seq)
-      - route_id -> dict (route metadata)
-      - route_company -> stop sequence + stop->seq map
-      - stop degree (transfer heuristic)
-      - grid for nearby stop search
-      - Pre-computed walk transfer graph
-    """
-    self._stop_list = db.get("stopList") or {}
-    self._route_list = db.get("routeList") or {}
-
-    if not isinstance(self._stop_list, dict):
-        self._stop_list = {}
-    if not isinstance(self._route_list, dict):
-        self._route_list = {}
-
-    stop_to_routes: Dict[str, List[StopOcc]] = {}
-    route_company_stops: Dict[Tuple[str, str], List[str]] = {}
-    route_company_stop_index: Dict[Tuple[str, str], Dict[str, int]] = {}
-
-    for rid, r in self._route_list.items():
-        if not isinstance(r, dict):
-            continue
-        stops = r.get("stops")
-        if not isinstance(stops, dict):
-            continue
-        for co_raw, seq in stops.items():
-            if not isinstance(seq, list):
-                continue
-            co = _norm_co(co_raw)  # normalize, so lightRail -> lightrail
-            key = (rid, co)
-            route_company_stops[key] = [str(x) for x in seq if isinstance(x, str)]
-            idx = {}
-            for i, sid in enumerate(route_company_stops[key]):
-                idx[sid] = i
-                stop_to_routes.setdefault(sid, []).append(
-                    StopOcc(route_id=rid, company=co, seq=i)
-                )
-            route_company_stop_index[key] = idx
-
-    # stop degree: number of unique services that pass through (company+route_id)
-    stop_degree: Dict[str, int] = {}
-    for sid, occs in stop_to_routes.items():
-        stop_degree[sid] = len({(o.company, o.route_id) for o in occs})
-
-    self._stop_to_routes = stop_to_routes
-    self._route_company_stops = route_company_stops
-    self._route_company_stop_index = route_company_stop_index
-    self._stop_degree = stop_degree
-
-    # spatial grid: for nearby stops
-    grid: Dict[Tuple[int, int], List[str]] = {}
-    cell_size = 0.004  # ~400m lat
-    for sid, s in self._stop_list.items():
-        if not isinstance(s, dict):
-            continue
-        loc = s.get("location") or {}
-        lat = _coerce_float(loc.get("lat"))
-        lon = _coerce_float(loc.get("lng"))
-        if lat is None or lon is None:
-            continue
-        gx = int(float(lat) / cell_size)
-        gy = int(float(lon) / cell_size)
-        grid.setdefault((gx, gy), []).append(str(sid))
-
-    self._grid = grid
-    self._grid_cell = cell_size
-
-    # Pre-compute static walk transfer edges (radius ~ 800m)
-    # This massively speeds up the A* search by avoiding runtime geometry calculations.
-    transfer_edges: Dict[str, List[Tuple[str, float]]] = {}
-    for sid, s in self._stop_list.items():
-        loc = s.get("location") or {}
-        lat = _coerce_float(loc.get("lat"))
-        lon = _coerce_float(loc.get("lng"))
-        if lat is None or lon is None:
-            continue
-
-        near = []
-        gx = int(float(lat) / cell_size)
-        gy = int(float(lon) / cell_size)
-        steps = 2  # roughly 800m search space
-        for dx in range(-steps, steps + 1):
-            for dy in range(-steps, steps + 1):
-                for sid2 in grid.get((gx + dx, gy + dy), []):
-                    if sid == sid2:
-                        continue
-
-                    s2 = self._stop_list.get(sid2, {})
-                    loc2 = s2.get("location") or {}
-                    lat2 = _coerce_float(loc2.get("lat"))
-                    lon2 = _coerce_float(loc2.get("lng"))
-                    if lat2 is None or lon2 is None:
-                        continue
-
-                    dist = _haversine_m(
-                        float(lat), float(lon), float(lat2), float(lon2)
-                    )
-                    if dist <= 800.0:
-                        near.append((sid2, dist))
-
-        # Sort by distance and cap to top 30 walk neighbors to prevent dense-area explosion
-        near.sort(key=lambda x: x[1])
-        transfer_edges[sid] = near[:30]
-
-    self._transfer_edges = transfer_edges
-
-
-async def _load_and_merge_gtfs_ferries(self) -> None:
-    """
-    Downloads the HK TD GTFS datasets (Bilingual), extracts ferry routes,
-    dynamically deduplicates them against individual existing HK Bus DB routes,
-    and merges the missing ones into memory using HK Bus unified route ID formats
-    and strict DB schemas (including freq, bound, service_type, and custom route codes).
-    """
-    cache_path = Path(self.valves.cache_dir) / "hk_gtfs_ferries_cache_v9.json"
-
-    # 1. Check Cache
-    if cache_path.exists() and (_now_s() - cache_path.stat().st_mtime) < 86400:
-        try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                ferry_data = json.load(f)
-                _inject_ferry_data_to_memory(self, ferry_data)
-                return
-        except Exception:
-            pass  # Fallback to download on cache corruption
-
-    gtfs_urls = {
-        "en": "https://static.data.gov.hk/td/pt-headway-en/gtfs.zip",
-        "tc": "https://static.data.gov.hk/td/pt-headway-tc/gtfs.zip",
-    }
-
-    responses = {}
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        for lang, url in gtfs_urls.items():
-            response = await client.get(url, timeout=30.0)
-            response.raise_for_status()
-            responses[lang] = response.content
-
-    ferry_data = {"stops": {}, "routes": {}, "route_stops": {}}
-
-    # Maps GTFS agency_id to our internal hkbus 'co' conventions
-    GTFS_AGENCY_MAP = {
-        "nwff": "sunferry",
-        "hkkf": "hkkf",
-        "craw": "fortuneferry",
-        "star": "starferry",
-        "pi": "parkisland",
-        "pdbb": "dbferry",
-        "coralsea": "coralsea",
-        "tks": "tsuiwahferry",
-        "chuenkee": "chuenkee",
-    }
-
-    # 2. Build fingerprints of currently loaded routes to avoid duplicates
-    def normalize_route_name(name: str) -> str:
-        n = str(name).lower()
-        n = re.sub(r"[\s\-\–\—\(\)]", "", n)
-        n = n.replace("to", "").replace("ordinaryferry", "").replace("fastferry", "")
-        return n
-
-    existing_ferry_fingerprints = set()
-    for r_key, r_info in self._route_list.items():
-        if not isinstance(r_info, dict):
-            continue
-
-        co_list = r_info.get("co", [])
-        if not co_list:
-            continue
-
-        co = _norm_co(co_list[0])
-        if _mode_of_company(co) == "ferry" or co in GTFS_AGENCY_MAP.values():
-            route_name = str(r_info.get("route", ""))
-            norm_name = normalize_route_name(route_name)
-            existing_ferry_fingerprints.add((co, norm_name))
-
-    # 3. Process GTFS
-    def read_csv(z, filename):
-        with z.open(filename) as f:
-            content = f.read().decode("utf-8-sig").splitlines()
-            return list(csv.DictReader(content))
-
-    z_en = zipfile.ZipFile(io.BytesIO(responses["en"]))
-    z_tc = zipfile.ZipFile(io.BytesIO(responses["tc"]))
-
-    routes_en_raw = read_csv(z_en, "routes.txt")
-    routes_tc_raw = read_csv(z_tc, "routes.txt")
-    routes_tc = {r["route_id"]: r for r in routes_tc_raw}
-
-    ferry_routes = {}
-
-    # Pass 1: Deduplication at the Route Level
-    for r in routes_en_raw:
-        # Accept standard and extended GTFS water transport codes
-        rt_type = str(r.get("route_type", "")).strip()
-        if rt_type not in ("4", "1000", "1200"):
-            continue
-
-        raw_agency = r.get("agency_id", "").lower()
-        mapped_co = GTFS_AGENCY_MAP.get(raw_agency, raw_agency)
-
-        # Safely extract the name
-        raw_name = r.get("route_short_name") or r.get("route_long_name") or "Ferry"
-        norm_name = normalize_route_name(raw_name)
-
-        is_duplicate = False
-        for existing_co, existing_norm_name in existing_ferry_fingerprints:
-            if mapped_co == existing_co and norm_name == existing_norm_name:
-                is_duplicate = True
-                break
-
-        if is_duplicate:
-            continue
-
-        ferry_routes[r["route_id"]] = {
-            "route_id": r["route_id"],
-            "agency": mapped_co,
-            "name": raw_name,
-        }
-
-    # Pass 2: Trips (Link Route, Direction, and Calendar)
-    trips_en_raw = read_csv(z_en, "trips.txt")
-    trips_meta = {}
-    representative_trips = {}
-    seen_route_dirs = set()
-
-    for t in trips_en_raw:
-        r_id = t["route_id"]
-        if r_id in ferry_routes:
-            trips_meta[t["trip_id"]] = {
-                "route_id": r_id,
-                "direction_id": t.get("direction_id", "0"),
-                "service_id": t.get("service_id", "1"),
-            }
-
-            dir_key = f"{r_id}_{t.get('direction_id', '0')}"
-            if dir_key not in seen_route_dirs:
-                representative_trips[t["trip_id"]] = trips_meta[t["trip_id"]]
-                seen_route_dirs.add(dir_key)
-
-    # =========================================================
-    # Pass 2.5: Calendar Bitmasks and Frequencies
-    # =========================================================
-    calendar_en_raw = read_csv(z_en, "calendar.txt")
-    service_bitmasks = {}
-    for c in calendar_en_raw:
-        mask = 0
-        if c.get("monday") == "1":
-            mask |= 1
-        if c.get("tuesday") == "1":
-            mask |= 2
-        if c.get("wednesday") == "1":
-            mask |= 4
-        if c.get("thursday") == "1":
-            mask |= 8
-        if c.get("friday") == "1":
-            mask |= 16
-        if c.get("saturday") == "1":
-            mask |= 32
-        if c.get("sunday") == "1":
-            mask |= 64
-        service_bitmasks[c["service_id"]] = str(mask)
-
-    trip_frequencies = {}
-    try:
-        # frequencies.txt is an optional GTFS file, wrap in try/except
-        freq_en_raw = read_csv(z_en, "frequencies.txt")
-        for f in freq_en_raw:
-            t_id = f["trip_id"]
-            start_hhmm = f["start_time"][:5].replace(":", "")
-            end_hhmm = f["end_time"][:5].replace(":", "")
-            h_mins = max(1, int(f["headway_secs"]) // 60)
-            trip_frequencies.setdefault(t_id, []).append((start_hhmm, end_hhmm, h_mins))
-    except KeyError:
-        pass
-    except Exception:
-        pass
-
-    # Pass 3: Stop Times (Extract Stop Sequences and Frequencies)
-    stop_times_en_raw = read_csv(z_en, "stop_times.txt")
-    trip_stops = {}
-    trip_first_depart = {}
-
-    for st in stop_times_en_raw:
-        t_id = st["trip_id"]
-        if t_id in trips_meta:
-            seq = int(st["stop_sequence"])
-            if t_id in representative_trips:
-                trip_stops.setdefault(t_id, []).append((seq, st["stop_id"]))
-
-            # Catch the departure time of the initial stop to build the 'freq' table
-            if seq == 1 or t_id not in trip_first_depart:
-                trip_first_depart[t_id] = st["departure_time"]
-
-    # Frequencies / Timetable Compilation
-    freq_data = {}
-    for t_id, meta in trips_meta.items():
-        r_id = meta["route_id"]
-        d_id = meta["direction_id"]
-        raw_s_id = meta["service_id"]
-
-        # 1. Translate the GTFS service_id into our hkbus bitmask!
-        s_id = service_bitmasks.get(raw_s_id, raw_s_id)
-
-        dir_key = f"{r_id}_{d_id}"
-        if dir_key not in freq_data:
-            freq_data[dir_key] = {}
-        if s_id not in freq_data[dir_key]:
-            freq_data[dir_key][s_id] = {}
-
-        # 2. Apply interval blocks if the trip is in frequencies.txt
-        if t_id in trip_frequencies:
-            for start_hm, end_hm, h_mins in trip_frequencies[t_id]:
-                freq_data[dir_key][s_id][start_hm] = [end_hm, h_mins]
+    def mode_times(self, company: str, ride_stops: int) -> Tuple[float, float]:
+        mode = mode_of_company(company)
+        if mode == "rail":
+            return 3.0, ride_stops * 1.8
+        elif mode == "minibus":
+            return 6.0, ride_stops * 1.5
+        elif mode == "ferry":
+            if company in ("starferry", "sunferry"):
+                return 30.0, ride_stops * 12.0
+            return 60.0, ride_stops * 15.0
+        elif mode == "lightrail":
+            return 5.0, ride_stops * 1.5
         else:
-            # 3. Fallback to fixed departure times from stop_times.txt
-            depart = trip_first_depart.get(t_id)
-            if depart:
-                hhmm = depart[:5].replace(":", "")
-                freq_data[dir_key][s_id][hhmm] = None
+            return 8.0, ride_stops * 2.5
 
-    stops_en_raw = read_csv(z_en, "stops.txt")
-    stops_tc_raw = read_csv(z_tc, "stops.txt")
-    stops_en = {s["stop_id"]: s for s in stops_en_raw}
-    stops_tc = {s["stop_id"]: s for s in stops_tc_raw}
+    def is_rail_station(self, stop_id: str) -> bool:
+        for occ in self.transit._stop_to_routes.get(stop_id, []):
+            if occ.company == "mtr":
+                return True
+        return False
 
-    def resolve_route_code(
-        agency: str, r_id: str, orig_en: str, dest_en: str, orig_tc: str, dest_tc: str
-    ) -> str:
-        """Applies HK Bus hardcoded rules for ferry route codes."""
-        if agency == "sunferry":
-            sunferry_pairs = [
-                ("CECC", "Central", "Cheung Chau"),
-                ("CEMW", "Central", "Mui Wo"),
-                ("NPHH", "North Point", "Hung Hom"),
-                ("NPKC", "North Point", "Kowloon City"),
-                ("IIPECMUW", "Peng Chau", "Mui Wo"),
-                ("IIMUWCMW", "Mui Wo", "Chi Ma Wan"),
-                ("IICMWCHC", "Chi Ma Wan", "Cheung Chau"),
-                ("IICHCMUW", "Cheung Chau", "Mui Wo"),
-                ("IIMUWCHC", "Mui Wo", "Cheung Chau"),
-            ]
-            o_en_low, d_en_low = orig_en.lower(), dest_en.lower()
-            for code, mo, md in sunferry_pairs:
-                if (mo.lower() in o_en_low and md.lower() in d_en_low) or (
-                    md.lower() in o_en_low and mo.lower() in d_en_low
-                ):
-                    return code
-        elif agency == "fortuneferry":
-            fortune_pairs = [
-                ("7059", "中環", "紅磡"),
-                ("7021", "北角", "啟德"),
-                ("7056", "北角", "觀塘"),
-                ("7025", "屯門", "大澳"),
-                ("7000004", "東涌", "大澳"),
-            ]
-            for code, mo, md in fortune_pairs:
-                if (mo in orig_tc and md in dest_tc) or (
-                    md in orig_tc and mo in dest_tc
-                ):
-                    return code
-        elif agency == "hkkf":
-            hkkf_pairs = [
-                ("KF1", "Central", "Sok Kwu Wan"),
-                ("KF2", "Central", "Yung Shue Wan"),
-                ("KF3", "Central", "Peng Chau"),
-                ("KF4", "Peng Chau", "Hei Ling Chau"),
-            ]
-            o_en_low, d_en_low = orig_en.lower(), dest_en.lower()
-            for code, mo, md in hkkf_pairs:
-                if (mo.lower() in o_en_low and md.lower() in d_en_low) or (
-                    md.lower() in o_en_low and mo.lower() in d_en_low
-                ):
-                    return code
+    def walk_cost(self, distance_m: float, target_stop_id: str) -> float:
+        effective_dist = distance_m
+        if self.is_rail_station(target_stop_id) and distance_m > 150.0:
+            effective_dist = max(50.0, distance_m - 250.0)
+        walk_time = effective_dist / self.WALK_SPEED_M_PER_MIN
+        return walk_time * self.WALK_WEIGHT
 
-        # Key Fallback: Use GTFS route ID as the route code for all other ferries
-        return r_id
+    def mode_bit(self, co: str) -> int:
+        m = mode_of_company(co)
+        return 1 if m == "rail" else 2 if m == "bus" else 4 if m == "ferry" else 8
 
-    ferry_pier_ids = set()
-    for t_id, stops in trip_stops.items():
-        trip_meta = representative_trips[t_id]
-        r_id = trip_meta["route_id"]
-        direction_id = trip_meta["direction_id"]
-
-        # HK Bus direction mapping logic ("I" for inbound / 1, "O" for outbound / 0)
-        bound_letter = "I" if direction_id == "1" else "O"
-
-        stops.sort(key=lambda x: x[0])
-        # Use raw GTFS stop IDs natively
-        stop_ids = [s[1] for s in stops]
-
-        ferry_pier_ids.update([s[1] for s in stops])
-
-        rt_info = ferry_routes[r_id]
-
-        orig_stop_id = stops[0][1]
-        dest_stop_id = stops[-1][1]
-
-        orig_en = stops_en.get(orig_stop_id, {}).get("stop_name", "Pier").strip()
-        dest_en = stops_en.get(dest_stop_id, {}).get("stop_name", "Pier").strip()
-        orig_tc = stops_tc.get(orig_stop_id, {}).get("stop_name", orig_en).strip()
-        dest_tc = stops_tc.get(dest_stop_id, {}).get("stop_name", dest_en).strip()
-
-        # Apply HK Bus custom logic to fetch correct route code before building ID string
-        route_code = resolve_route_code(
-            rt_info["agency"], r_id, orig_en, dest_en, orig_tc, dest_tc
-        )
-
-        # Build HK Bus unified route ID format (GTFS Route ID/Custom Code + serviceType + orig_en + dest_en)
-        # Ferries always use serviceType 1.
-        unified_route_id = f"{route_code}+1+{orig_en}+{dest_en}"
-
-        route_freq = freq_data.get(f"{r_id}_{direction_id}", {})
-
-        ferry_data["route_stops"][unified_route_id] = stop_ids
-        ferry_data["routes"][unified_route_id] = {
-            "gtfsId": r_id,
-            "route_id": unified_route_id,
-            "route": route_code,
-            "company": rt_info["agency"],
-            "co": [rt_info["agency"]],
-            "orig_tc": orig_tc,
-            "orig_en": orig_en,
-            "dest_tc": dest_tc,
-            "dest_en": dest_en,
-            "orig": {"en": orig_en, "zh": orig_tc},
-            "dest": {"en": dest_en, "zh": dest_tc},
-            "service_type": 1,
-            "serviceType": "1",
-            "bound": {rt_info["agency"]: bound_letter},
-            "stops": {rt_info["agency"]: stop_ids, bound_letter: stop_ids},
-            "freq": route_freq,
-        }
-
-    for sid in ferry_pier_ids:
-        s_en = stops_en.get(sid, {})
-        s_tc = stops_tc.get(sid, {})
-
-        ferry_data["stops"][sid] = {
-            "stop_id": sid,
-            "name": {
-                "en": s_en.get("stop_name", ""),
-                "zh": s_tc.get("stop_name", s_en.get("stop_name", "")),
-            },
-            "lat": float(s_en.get("stop_lat", 0)),
-            "lng": float(s_en.get("stop_lon", 0)),
-        }
-
-    try:
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(ferry_data, f, ensure_ascii=False)
-    except Exception:
-        pass
-
-    _inject_ferry_data_to_memory(self, ferry_data)
-
-
-def _inject_ferry_data_to_memory(self, ferry_data: dict) -> None:
-    """
-    Appends the deduplicated GTFS dictionaries into the planner's main search memory
-    conforming strictly to HK Bus schemas.
-    """
-    for stop_id, stop_info in ferry_data["stops"].items():
-        self._stop_list[stop_id] = {
-            "stop": str(stop_id),
-            "name": stop_info["name"],
-            "location": {"lat": stop_info["lat"], "lng": stop_info["lng"]},
-        }
-        # Add to spatial grid
-        lat = float(stop_info["lat"])
-        lon = float(stop_info["lng"])
-        gx = int(lat / self._grid_cell)
-        gy = int(lon / self._grid_cell)
-        self._grid.setdefault((gx, gy), []).append(str(stop_id))
-
-    for unified_route_id, stop_ids in ferry_data["route_stops"].items():
-        route_meta = ferry_data["routes"][unified_route_id]
-        company = route_meta["company"]
-
-        COMPANY_MODE[company] = "ferry"
-
-        # Load explicit flat properties matching HK Bus conventions
-        self._route_list[unified_route_id] = {
-            "gtfsId": route_meta.get("gtfsId"),
-            "route": route_meta["route"],
-            "co": [str(company)],
-            "orig_tc": route_meta["orig_tc"],
-            "orig_en": route_meta["orig_en"],
-            "dest_tc": route_meta["dest_tc"],
-            "dest_en": route_meta["dest_en"],
-            "orig": route_meta["orig"],
-            "dest": route_meta["dest"],
-            "service_type": route_meta["service_type"],
-            "serviceType": route_meta["serviceType"],
-            "bound": route_meta["bound"],
-            "stops": route_meta["stops"],
-            "freq": route_meta["freq"],
-        }
-
-        self._route_company_stops[(unified_route_id, company)] = stop_ids
-        self._route_company_stop_index[(unified_route_id, company)] = {
-            sid: idx for idx, sid in enumerate(stop_ids)
-        }
-
-        for seq, sid in enumerate(stop_ids):
-            occ = StopOcc(route_id=unified_route_id, company=company, seq=seq)
-            if sid not in self._stop_to_routes:
-                self._stop_to_routes[sid] = []
-                self._stop_degree[sid] = 0
-            self._stop_to_routes[sid].append(occ)
-            self._stop_degree[sid] += 1
-
-
-async def _ensure_eta_db_loaded(self) -> None:
-    if getattr(self, "_db_loaded", False):
-        return
-    async with self._db_lock:
-        if getattr(self, "_db_loaded", False):
-            return
-        db, source, md5 = await _load_hkbus_db(self)
-        if not db:
-            raise RuntimeError("Failed to load hkbus DB.")
-
-        # 1. Seed the instance lists so the GTFS deduplication loop can see the base DB
-        self._stop_list = db.get("stopList") or {}
-        self._route_list = db.get("routeList") or {}
-
-        # 2. Parse and merge GTFS ferries (appends directly to self._route_list and self._stop_list)
-        await _load_and_merge_gtfs_ferries(self)
-
-        # 3. Sync the merged lists back into the db dictionary BEFORE _build_indices runs!
-        # Otherwise, _build_indices will reset the lists and instantly delete all the GTFS ferries.
-        db["stopList"] = self._stop_list
-        db["routeList"] = self._route_list
-
-        # 4. Now build the spatial grid and walk edges WITH the ferry piers included!
-        _build_indices(self, db)
-
-        self._db_loaded = True
-        self._db_source = source
-        self._db_md5 = md5
-
-
-def _stop_lite(self, stop_id: str) -> Optional[dict]:
-    s = self._stop_list.get(stop_id)
-    if not isinstance(s, dict):
-        return None
-    loc = s.get("location") or {}
-    lat = _coerce_float(loc.get("lat"))
-    lon = _coerce_float(loc.get("lng"))
-    name = s.get("name") or {}
-    name_en = str(name.get("en", "") or "")
-    name_zh = str(name.get("zh", "") or "")
-    return {
-        "stop_id": stop_id,
-        "name": {"en": name_en, "zh": name_zh},
-        "location": {"lat": lat, "lng": lon},
-        "display": name_en if name_en else (name_zh if name_zh else stop_id),
-    }
-
-
-def _route_lite(self, route_id: str) -> Optional[dict]:
-    r = self._route_list.get(route_id)
-    if not isinstance(r, dict):
-        return None
-    return {
-        "route_id": route_id,
-        "route": str(r.get("route", "") or ""),
-        "serviceType": r.get(
-            "serviceType"
-        ),  # may exist for KMB; treat as optional/opaque
-        "co": [str(x) for x in (r.get("co") or []) if isinstance(x, str)],
-        "bound": r.get("bound") if isinstance(r.get("bound"), dict) else {},
-        "orig": r.get("orig") if isinstance(r.get("orig"), dict) else {},
-        "dest": r.get("dest") if isinstance(r.get("dest"), dict) else {},
-    }
-
-
-def _stop_distance_to_point(
-    self, stop_id: str, lat2: float, lon2: float
-) -> Optional[float]:
-    s = self._stop_list.get(stop_id)
-    if not isinstance(s, dict):
-        return None
-    loc = s.get("location") or {}
-    lat1 = _coerce_float(loc.get("lat"))
-    lon1 = _coerce_float(loc.get("lng"))
-    if lat1 is None or lon1 is None:
-        return None
-    return _haversine_m(float(lat1), float(lon1), float(lat2), float(lon2))
-
-
-def _nearby_stop_ids(
-    self, lat: float, lon: float, radius_m: float, limit: int = 30
-) -> List[Tuple[str, float]]:
-    cell = self._grid_cell
-    gx = int(lat / cell)
-    gy = int(lon / cell)
-    # approximate cell steps
-    steps = max(1, int((radius_m / 111000.0) / cell) + 1)
-    cand = []
-    for dx in range(-steps, steps + 1):
-        for dy in range(-steps, steps + 1):
-            for sid in self._grid.get((gx + dx, gy + dy), []):
-                d = _stop_distance_to_point(self, sid, lat, lon)
-                if d is None:
+    def is_operating_now(self, freq_data: dict, expected_bound: str = "", projected_dt: Optional[datetime] = None) -> bool:
+        if not freq_data or not isinstance(freq_data, dict):
+            return True
+        now_hk = projected_dt or datetime.now(HK_TZ)
+        hour = now_hk.hour
+        day_of_week = now_hk.weekday()
+        if hour < 4:
+            hour += 24
+            day_of_week = (day_of_week - 1) % 7
+        current_time_str = f"{hour:02d}{now_hk.minute:02d}"
+        today_bit = 1 << day_of_week
+        bounds_to_check = [expected_bound] if expected_bound and expected_bound in freq_data else list(freq_data.keys())
+        for b in bounds_to_check:
+            bound_schedules = freq_data.get(b, {})
+            if not isinstance(bound_schedules, dict):
+                continue
+            matching_schedules = []
+            for day_mask_str, schedule in bound_schedules.items():
+                try:
+                    day_mask = int(day_mask_str)
+                    if (day_mask & today_bit) > 0 or (day_mask & 128) > 0 or (day_mask & 256) > 0:
+                        matching_schedules.append(schedule)
+                except ValueError:
+                    return True
+            for schedule in matching_schedules:
+                if not isinstance(schedule, dict):
                     continue
-                if d <= radius_m:
-                    cand.append((sid, d))
-    cand.sort(key=lambda x: x[1])
-    return cand[:limit]
+                fixed_times = []
+                for start_str, value in schedule.items():
+                    if value is None:
+                        fixed_times.append(start_str)
+                    elif isinstance(value, list) and len(value) >= 1:
+                        end_str = str(value[0])
+                        if start_str <= current_time_str <= end_str:
+                            return True
+                if fixed_times:
+                    if min(fixed_times) <= current_time_str <= max(fixed_times):
+                        return True
+        return False
 
-
-# Type aliases for nicer tool-call parameter menus (optional but LLM-friendly)
-HKO_LANG = Literal["en", "tc", "sc"]
-HKO_RFORMAT = Literal["json", "csv"]
-
-
-# ============================================================
-# TD: Bus/minibus ETAs (existing), plus MTR/LRT/MTR Bus/Ferries
-# ============================================================
-async def _kmb_etas(
-    self, stop_id: str, route: str, bound: str, seq: int, service_type: str
-) -> List[dict]:
-    # service_type: poorly documented by KMB. Prefer regular service_type=1.
-    # If regular returns empty and an observed numeric service_type is provided, try it as a fallback.
-    async def _fetch(st: str) -> List[dict]:
-        url = f"{KMB_ETA_BASE}/eta/{stop_id}/{route}/{st}"
-        j = await _request(
-            self,
-            url,
-            expect="json",
-            cache_scope="mem",
-            cache_ttl_s=self.valves.eta_cache_ttl_s,
-        )
-        if not isinstance(j, dict) or j.get("error"):
-            return []
-        data = j.get("data") or []
-        return data if isinstance(data, list) else []
-
-    data = await _fetch("1")
-    st_obs = None
-    if isinstance(service_type, str) and service_type.strip().isdigit():
-        st_obs = service_type.strip()
-    if (not data) and st_obs and st_obs != "1":
-        data = await _fetch(st_obs)
-
-    if not data:
-        return []
-    # KMB dir is typically "I"/"O" in ETA objects; bound from hkbus is "I"/"O" (best-effort)
-    out = []
-    for e in data:
-        if not isinstance(e, dict):
-            continue
-        if bound and str(e.get("dir", "")).strip() != bound:
-            continue
-        if str(e.get("seq", "")).strip() and str(e.get("seq")).strip().isdigit():
-            if int(str(e.get("seq")).strip()) != int(seq) + 1:
-                # hkbus seq is 0-based; KMB API seq is 1-based (best-effort)
-                pass
-        out.append(e)
-    # Sort by ETA time
-    out.sort(key=lambda x: x.get("eta") or "")
-    return out
-
-
-async def _ctb_etas(self, stop_id: str, route: str, bound: str, seq: int) -> List[dict]:
-    # Citybus v2 ETA: /eta/{company_id}/{stop_id}/{route}
-    # company_id is "CTB" for all.
-    url = f"{CTB_ETA_BASE}/eta/CTB/{stop_id}/{route}"
-    j = await _request(
+    async def plan(
         self,
-        url,
-        expect="json",
-        cache_scope="mem",
-        cache_ttl_s=self.valves.eta_cache_ttl_s,
-    )
-    if not isinstance(j, dict) or j.get("error"):
-        return []
-    data = j.get("data") or []
-    if not isinstance(data, list):
-        return []
-    out = []
-    for e in data:
-        if not isinstance(e, dict):
-            continue
-        # Citybus direction field is "dir" (string), usually "I"/"O". hkbus bound may be "I"/"O".
-        if bound and str(e.get("dir", "")).strip() != bound:
-            continue
-        out.append(e)
-    out.sort(key=lambda x: x.get("eta") or "")
-    return out
+        origin_place: str,
+        destination_place: str,
+        limit: int = 3,
+        max_transfers: Optional[int] = None,
+        preferences: Optional[dict] = None,
+        lang: Literal["en", "tc", "sc"] = "en",
+        __event_emitter__: Optional[Any] = None,
+    ) -> dict:
+        import heapq
+        preferences = preferences or {}
+        limit = max(1, min(int(limit), 5))
+        max_transfers = int(max_transfers) if max_transfers is not None else 6
 
+        if __event_emitter__:
+            await __event_emitter__({"type": "status", "data": {"description": "Resolving locations…", "done": False}})
 
-async def _gmb_etas(
-    self, stop_id: str, gtfs_id: str, bound: str, seq: int
-) -> List[dict]:
-    # GMB: /eta/stop/{stop_id}/{route_id}
-    # hkbus provides gtfsId; use that to avoid needing region lookup.
-    url = f"{GMB_ETA_BASE}/eta/stop/{stop_id}/{gtfs_id}"
-    j = await _request(
-        self,
-        url,
-        expect="json",
-        cache_scope="mem",
-        cache_ttl_s=self.valves.eta_cache_ttl_s,
-    )
-    if not isinstance(j, dict) or j.get("error"):
-        return []
-    data = j.get("data") or []
-    if not isinstance(data, list):
-        return []
-    out = []
-    for e in data:
-        if not isinstance(e, dict):
-            continue
-        # best-effort direction filter
-        if (
-            bound
-            and str(e.get("route_seq", "")).strip()
-            and str(e.get("route_seq")).strip() != bound
-        ):
-            pass
-        out.append(e)
-    # GMB ETA has "eta" iso
-    out.sort(key=lambda x: x.get("eta") or "")
-    return out
+        o_loc = await self.landsd.location_search(origin_place, limit=1)
+        d_loc = await self.landsd.location_search(destination_place, limit=1)
 
+        def get_pt(loc_resp) -> Optional[Tuple[float, float]]:
+            items = loc_resp.get("items", []) if isinstance(loc_resp, dict) else []
+            if not items:
+                return None
+            w = items[0].get("wgs84") or {}
+            lat, lon = coerce_float(w.get("lat")), coerce_float(w.get("lon"))
+            return (lat, lon) if lat and lon else None
 
-async def _mtr_next_trains(self, line: str, sta: str, lang: str = "en") -> List[dict]:
-    """
-    MTR Next Train API (heavy rail).
-    Returns normalized items with fields: minutes, iso, platform, dest, direction.
-    """
-    if not line or not sta:
-        return []
-    lang0 = (lang or "en").lower()
-    lang_param = "tc" if lang0 in ("tc", "zh", "sc") else "en"
-    params = {"line": line, "sta": sta, "lang": lang_param}
-    j = await _request(
-        self,
-        MTR_TRAIN_BASE,
-        params=params,
-        expect="json",
-        cache_ttl_s=self.valves.eta_cache_ttl_s,
-        cache_scope="mem",
-    )
-    if not isinstance(j, dict):
-        return []
+        o_pt = get_pt(o_loc)
+        d_pt = get_pt(d_loc)
 
-    # special arrangement / suspension cases
-    status = j.get("status")
-    if status == 0:
-        return [
-            {
-                "direction": None,
-                "dest": None,
-                "platform": None,
-                "minutes": None,
-                "iso": None,
-                "message": j.get("message") or "",
-                "url": j.get("url"),
-                "raw": j,
-            }
-        ]
+        if not o_pt or not d_pt:
+            return {"error": "location_not_found", "detail": "Could not resolve WGS84 coordinates for origin/destination."}
 
-    data = j.get("data")
-    if not isinstance(data, dict):
-        return []
+        def get_knn_stops(pt, k=25, max_radius=800):
+            near = self.transit.nearby_stop_ids(pt[0], pt[1], radius_m=max_radius, limit=k)
+            if not near:
+                near = self.transit.nearby_stop_ids(pt[0], pt[1], radius_m=4000, limit=3)
+            return {sid: dist for sid, dist in near}
 
-    key = f"{line}-{sta}"
-    payload = data.get(key)
-    if not isinstance(payload, dict):
-        return []
+        o_candidates = get_knn_stops(o_pt, k=25)
+        d_candidates = get_knn_stops(d_pt, k=25)
+        d_set = set(d_candidates.keys())
 
-    out: List[dict] = []
-    for d in ("UP", "DOWN"):
-        arr = payload.get(d)
-        if not isinstance(arr, list):
-            continue
-        for t in arr:
-            if not isinstance(t, dict):
+        approach_goal_tails = {}
+        for dsid in d_set:
+            for occ in self.transit._stop_to_routes.get(dsid, []):
+                co, rid = occ.company, occ.route_id
+                seq_list = self.transit._route_company_stops.get((rid, co), [])
+                idxmap = self.transit._route_company_stop_index.get((rid, co), {})
+                di = idxmap.get(dsid)
+                if di is not None:
+                    for back in range(1, 80):
+                        bi = int(di) - back
+                        if bi < 0:
+                            break
+                        bsid = seq_list[bi]
+                        if bsid == dsid:
+                            continue
+                        approach_goal_tails.setdefault(bsid, []).append({
+                            "company": co, "route_id": rid, "board_stop_id": bsid,
+                            "alight_stop_id": dsid, "board_seq": bi, "alight_seq": int(di),
+                        })
+
+        def h_time(stop_id: str) -> float:
+            s = self.transit._stop_list.get(stop_id)
+            if not isinstance(s, dict):
+                return 0.0
+            loc = s.get("location") or {}
+            lat, lon = coerce_float(loc.get("lat")), coerce_float(loc.get("lng"))
+            if not lat or not lon:
+                return 0.0
+            return haversine_m(lat, lon, d_pt[0], d_pt[1]) / 800.0
+
+        pq = []
+        push_id = 0
+        pareto_visited = {}
+
+        for sid, ow in o_candidates.items():
+            actual_t0 = ow / self.WALK_SPEED_M_PER_MIN
+            cost0 = self.walk_cost(float(ow), sid)
+            st = {"cur": sid, "walk": float(ow), "actual_time": float(actual_t0), "perceived_cost": cost0, "tx": 0, "modes": 0, "legs": [], "last_was_walk": True}
+            f_score = cost0 + (h_time(sid) * 1.5)
+            heapq.heappush(pq, (f_score, cost0, st["actual_time"], st["walk"], push_id, st))
+            pareto_visited[sid] = [(st["walk"], cost0, 0, 0)]
+            push_id += 1
+
+        if __event_emitter__:
+            await __event_emitter__({"type": "status", "data": {"description": "Running Multi-Criteria A* Search…", "done": False}})
+
+        best_goals = []
+        expansions = 0
+        global_best_cost = float("inf")
+        eta_validity_cache = {}
+
+        async def is_leg_active(L: dict) -> bool:
+            co = norm_co(L["company"])
+            if co not in ("kmb", "ctb", "nlb", "gmb"):
+                return True
+            rid = L["route_id"]
+            bid = L["board_stop_id"]
+            proj_mins = L.get("board_time_minutes", 0.0)
+            cache_key = (co, rid, bid, int(proj_mins // 30))
+            if cache_key in eta_validity_cache:
+                return eta_validity_cache[cache_key]
+            r = self.transit._route_list.get(rid, {})
+            route_no = str(r.get("route", "")).strip().upper()
+            if not route_no or route_no.endswith("R"):
+                eta_validity_cache[cache_key] = True
+                return True
+            freq_data = r.get("freq")
+            is_scheduled_now = True
+            projected_dt = datetime.now(HK_TZ) + timedelta(minutes=proj_mins)
+            if freq_data:
+                bounds = r.get("bound", {}) if isinstance(r.get("bound"), dict) else {}
+                bound = str(bounds.get(co, bounds.get(co.lower(), "")) or "")
+                is_scheduled_now = self.is_operating_now(freq_data, bound, projected_dt)
+            if not is_scheduled_now:
+                eta_validity_cache[cache_key] = False
+                return False
+            board_seq = L.get("board_seq")
+            if board_seq is None:
+                idxmap = self.transit._route_company_stop_index.get((rid, co), {})
+                board_seq = idxmap.get(bid, 0)
+            etas = await self.transit.leg_next_departures(co, rid, bid, board_seq, limit_etas=1, lang=lang)
+            has_live_eta = any(e.get("eta", {}).get("minutes") is not None for e in (etas or []))
+            is_valid = has_live_eta or is_scheduled_now
+            eta_validity_cache[cache_key] = is_valid
+            return is_valid
+
+        async def is_candidate_valid(legs: list) -> bool:
+            for L in legs:
+                if not await is_leg_active(L):
+                    return False
+            return True
+
+        while pq and expansions < self.MAX_EXPANSIONS:
+            f_score, perceived_cost, actual_time, walk_m, _, st = heapq.heappop(pq)
+            if best_goals and f_score > global_best_cost * 1.25 and len(best_goals) >= 10:
+                break
+            cur = st["cur"]
+            tx = st["tx"]
+            modes = st["modes"]
+            expansions += 1
+            if expansions % 10 == 0:
+                await asyncio.sleep(0)
+                if __event_emitter__ and expansions % 100 == 0:
+                    msg = f"Running A* Search... (Explored {expansions:,} transit combinations)"
+                    await __event_emitter__({"type": "status", "data": {"description": msg, "done": False}})
+
+            if cur in d_set and st["legs"]:
+                final_walk = float(d_candidates[cur])
+                effective_final_walk = final_walk
+                if self.is_rail_station(cur) and final_walk > 150.0:
+                    effective_final_walk = max(50.0, final_walk - 250.0)
+                walk_penalty_multiplier = 1.0 if effective_final_walk <= 800.0 else (effective_final_walk / 800.0)
+                final_walk_time = effective_final_walk / self.WALK_SPEED_M_PER_MIN
+                total_walk = walk_m + final_walk
+                total_actual_time = actual_time + final_walk_time
+                total_perceived = perceived_cost + (final_walk_time * self.WALK_WEIGHT * walk_penalty_multiplier)
+                if total_perceived < global_best_cost:
+                    global_best_cost = total_perceived
+                if not await is_candidate_valid(st["legs"]):
+                    continue
+                if total_perceived < global_best_cost:
+                    global_best_cost = total_perceived
+                best_goals.append({"perceived_cost": total_perceived, "actual_time": total_actual_time, "walk_m": total_walk, "transfers": tx, "legs": list(st["legs"]), "modes": modes, "final_stop": cur})
+                if final_walk < 300.0:
+                    continue
+
+            if cur in approach_goal_tails and st["legs"]:
+                for tail in approach_goal_tails[cur]:
+                    from_mode = mode_of_company(st["legs"][-1]["company"])
+                    to_mode = mode_of_company(tail["company"])
+                    ntx = tx
+                    if not (from_mode == "rail" and to_mode == "rail"):
+                        ntx = tx + 1
+                    if ntx > max_transfers:
+                        continue
+                    final_stop = tail["alight_stop_id"]
+                    ride_stops = tail["alight_seq"] - tail["board_seq"]
+                    wait_time, ride_time = self.mode_times(tail["company"], ride_stops)
+                    tx_penalty = self.transfer_penalty(from_mode, to_mode)
+                    final_walk = float(d_candidates.get(final_stop, 0.0))
+                    effective_final_walk = final_walk
+                    if self.is_rail_station(final_stop) and final_walk > 150.0:
+                        effective_final_walk = max(50.0, final_walk - 250.0)
+                    final_walk_time = effective_final_walk / self.WALK_SPEED_M_PER_MIN
+                    total_walk = walk_m + final_walk
+                    total_actual_time = actual_time + wait_time + ride_time + final_walk_time
+                    tail_perceived = (wait_time * self.WAIT_WEIGHT) + (ride_time * self.RIDE_WEIGHT) + tx_penalty + (final_walk_time * self.WALK_WEIGHT)
+                    total_perceived = perceived_cost + tail_perceived
+                    if total_perceived < global_best_cost:
+                        global_best_cost = total_perceived
+                    nlegs = list(st["legs"])
+                    tail_copy = tail.copy()
+                    tail_copy["board_time_minutes"] = actual_time
+                    nlegs.append(tail_copy)
+                    if not await is_candidate_valid(nlegs):
+                        continue
+                    if total_perceived < global_best_cost:
+                        global_best_cost = total_perceived
+                    best_goals.append({"perceived_cost": total_perceived, "actual_time": total_actual_time, "walk_m": total_walk, "transfers": ntx, "legs": nlegs, "modes": modes | self.mode_bit(tail["company"]), "final_stop": final_stop})
+
+            if tx >= max_transfers:
                 continue
-            if str(t.get("valid", "Y")).upper() != "Y":
-                continue
-            mins = None
-            try:
-                if str(t.get("ttnt", "")).strip().isdigit():
-                    mins = int(str(t.get("ttnt")).strip())
-            except Exception:
-                mins = None
-            dt = _parse_hk_dt(str(t.get("time", "") or ""))
-            iso = dt.isoformat() if dt else None
-            out.append(
-                {
-                    "direction": d,
-                    "dest": t.get("dest"),
-                    "platform": t.get("plat"),
-                    "minutes": mins,
-                    "iso": iso,
-                    "seq": t.get("seq"),
-                    "source": t.get("source"),
-                }
-            )
-    out.sort(
-        key=lambda x: (
-            10**9 if x.get("minutes") is None else int(x["minutes"]),
-            str(x.get("direction") or ""),
-        )
-    )
-    return out
 
+            if not st.get("last_was_walk"):
+                for neighbor, walk_dist in self.transit._transfer_edges.get(cur, []):
+                    nw = walk_m + walk_dist
+                    walk_time = walk_dist / self.WALK_SPEED_M_PER_MIN
+                    nt_actual = actual_time + walk_time
+                    leg_cost = self.walk_cost(walk_dist, neighbor)
+                    ncost = perceived_cost + leg_cost
+                    dominated = False
+                    for pw, pcost, ptx, pm in pareto_visited.get(neighbor, []):
+                        if pw <= nw and pcost <= ncost and ptx <= tx and pm == modes:
+                            dominated = True
+                            break
+                    if not dominated:
+                        pareto_visited.setdefault(neighbor, []).append((nw, ncost, tx, modes))
+                        nst = {"cur": neighbor, "walk": nw, "actual_time": nt_actual, "perceived_cost": ncost, "tx": tx, "modes": modes, "legs": list(st["legs"])}
+                        nf = ncost + (h_time(neighbor) * 1.5)
+                        heapq.heappush(pq, (nf, ncost, nt_actual, nw, push_id, nst))
+                        push_id += 1
 
-async def _lrt_next_trains(self, station_id: int) -> List[dict]:
-    """
-    Light Rail Next Train API.
-    Returns normalized items with fields: route_no, minutes(text), platform_id, dest.
-    """
-    if station_id <= 0:
-        return []
-    j = await _request(
-        self,
-        MTR_LRT_BASE,
-        params={"station_id": station_id},
-        expect="json",
-        cache_ttl_s=self.valves.eta_cache_ttl_s,
-        cache_scope="mem",
-    )
-    if not isinstance(j, dict):
-        return []
-    out: List[dict] = []
-    pls = j.get("platform_list")
-    if not isinstance(pls, list):
-        return out
-    for p in pls:
-        if not isinstance(p, dict):
-            continue
-        pid = p.get("platform_id")
-        routes = p.get("route_list")
-        if not isinstance(routes, list):
-            continue
-        for r in routes:
-            if not isinstance(r, dict):
-                continue
-            time_en = str(r.get("time_en", "") or "")
-            mins = _minutes_from_compact_text(time_en)
-            out.append(
-                {
-                    "platform": pid,
-                    "route_no": r.get("route_no"),
-                    "dest_en": r.get("dest_en"),
-                    "dest_zh": r.get("dest_ch"),
-                    "minutes": mins,
-                    "text": time_en or None,
-                    "train_length": r.get("train_length"),
-                    "arrival_departure": r.get("arrival_departure"),
-                }
-            )
-    out.sort(
-        key=lambda x: (
-            10**9 if x.get("minutes") is None else int(x["minutes"]),
-            str(x.get("route_no") or ""),
-        )
-    )
-    return out
+            for occ in self.transit._stop_to_routes.get(cur, []):
+                rid, co = occ.route_id, occ.company
+                if st["legs"] and st["legs"][-1]["route_id"] == rid:
+                    continue
+                to_mode = mode_of_company(co)
+                mode_bit = self.mode_bit(co)
+                nmodes = modes | mode_bit
+                from_mode = mode_of_company(st["legs"][-1]["company"]) if st["legs"] else None
+                tx_penalty = self.transfer_penalty(from_mode, to_mode)
+                ntx = tx
+                if not (from_mode == "rail" and to_mode == "rail"):
+                    ntx = tx + 1
+                seq_list = self.transit._route_company_stops.get((rid, co), [])
+                if occ.seq >= len(seq_list):
+                    continue
+                for i in range(occ.seq + 1, min(len(seq_list), occ.seq + 120)):
+                    alight_sid = seq_list[i]
+                    ride_stops = i - occ.seq
+                    wait_time, ride_time = self.mode_times(co, ride_stops)
+                    nt_actual = actual_time + wait_time + ride_time
+                    leg_perceived_cost = (wait_time * self.WAIT_WEIGHT) + (ride_time * self.RIDE_WEIGHT) + tx_penalty
+                    ncost = perceived_cost + leg_perceived_cost
+                    dominated = False
+                    for pw, pcost, ptx, pm in pareto_visited.get(alight_sid, []):
+                        if pw <= walk_m and pcost <= ncost and ptx <= ntx and pm == nmodes:
+                            dominated = True
+                            break
+                    if not dominated:
+                        pareto_visited.setdefault(alight_sid, []).append((walk_m, ncost, ntx, nmodes))
+                        nlegs = list(st["legs"])
+                        nlegs.append({"company": co, "route_id": rid, "board_stop_id": cur, "alight_stop_id": alight_sid, "board_time_minutes": actual_time})
+                        nst = {"cur": alight_sid, "walk": walk_m, "actual_time": nt_actual, "perceived_cost": ncost, "tx": ntx, "modes": nmodes, "legs": nlegs, "last_was_walk": False}
+                        nf = ncost + (h_time(alight_sid) * 1.5)
+                        heapq.heappush(pq, (nf, ncost, nt_actual, walk_m, push_id, nst))
+                        push_id += 1
 
+        if not best_goals:
+            if __event_emitter__:
+                await __event_emitter__({"type": "status", "data": {"description": "Could not find a feasible route.", "done": True}})
+            return {"error": "no_route_found", "detail": "Could not find a feasible route."}
 
-async def _mtr_bus_next_buses(
-    self, route_name: str, stop_id: str, lang: str = "en"
-) -> List[dict]:
-    """
-    MTR Bus / Feeder Bus Next Bus API (route-centric). Filter to one stop_id.
-    """
-    if not route_name or not stop_id:
-        return []
-    lang0 = (lang or "en").lower()
-    api_lang = "zh" if lang0 in ("tc", "zh", "sc") else "en"
-    body = {"language": api_lang, "routeName": route_name}
-    j = await _request(
-        self,
-        MTR_BUS_BASE,
-        method="POST",
-        json_body=body,
-        expect="json",
-        cache_ttl_s=self.valves.eta_cache_ttl_s,
-        cache_scope="mem",
-    )
-    if not isinstance(j, dict):
-        return []
-    stops = j.get("busStop")
-    if not isinstance(stops, list):
-        return []
-    target = None
-    for s in stops:
-        if isinstance(s, dict) and str(s.get("busStopId", "")).strip() == stop_id:
-            target = s
-            break
-    if not isinstance(target, dict):
-        return []
+        champion_fastest = min(best_goals, key=lambda x: x["actual_time"])
+        champion_direct = min(best_goals, key=lambda x: (x["transfers"], x["actual_time"]))
+        champion_lazy = min(best_goals, key=lambda x: (x["walk_m"], x["actual_time"]))
+        balanced_goals = sorted(best_goals, key=lambda x: x["perceived_cost"])
 
-    out: List[dict] = []
-    buses = target.get("bus")
-    if not isinstance(buses, list):
-        return out
-    for b in buses:
-        if not isinstance(b, dict):
-            continue
-        sec = None
-        try:
-            if str(b.get("departureTimeInSecond", "")).strip().isdigit():
-                sec = int(str(b.get("departureTimeInSecond")).strip())
-        except Exception:
-            sec = None
-        mins = None
-        if sec is not None:
-            mins = max(0, int(round(sec / 60.0)))
-        out.append(
-            {
-                "minutes": mins,
-                "text": b.get("departureTimeText") or b.get("arrivalTimeText") or None,
-                "is_delayed": b.get("isDelayed"),
-                "is_scheduled": b.get("isScheduled"),
-                "remark": b.get("busRemark"),
-                "lineRef": b.get("lineRef"),
-                "busId": b.get("busId"),
-            }
-        )
-    out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
-    return out
+        unique_plans = []
+        seen_sigs = set()
 
+        def add_plan(g, semantic_tag):
+            sig = ">".join([f"{L['company']}:{L['route_id']}:{L['alight_stop_id']}" for L in g["legs"]])
+            if sig in seen_sigs:
+                for plan in unique_plans:
+                    if plan["_sig"] == sig and semantic_tag not in plan["tags"]:
+                        plan["tags"].append(semantic_tag)
+                return
+            g_copy = g.copy()
+            g_copy["tags"] = [semantic_tag]
+            g_copy["_sig"] = sig
+            unique_plans.append(g_copy)
+            seen_sigs.add(sig)
 
-async def _sunferry_next_trip(self, route_code: str, lang: str = "en") -> List[dict]:
-    if not route_code:
-        return []
-    params = {"route": route_code}
-    j = await _request(
-        self,
-        f"{SUNFERRY_BASE}/eta/",
-        params=params,
-        expect="json",
-        cache_ttl_s=30,
-        cache_scope="mem",
-    )
-    if not isinstance(j, dict):
-        return []
-    data = j.get("data")
-    if not isinstance(data, list):
-        return []
-    ts = j.get("generated_timestamp") or (
-        data[0].get("date_timestamp") if data and isinstance(data[0], dict) else None
-    )
-    now_dt = _parse_iso(str(ts or "")) or datetime.now(HK_TZ)
-    if now_dt.tzinfo is None:
-        now_dt = now_dt.replace(tzinfo=HK_TZ)
-    now_hk = now_dt.astimezone(HK_TZ)
+        add_plan(champion_fastest, "fastest")
+        add_plan(champion_direct, "fewest_transfers")
+        add_plan(champion_lazy, "least_walking")
+        for g in balanced_goals:
+            if len(unique_plans) >= limit:
+                break
+            add_plan(g, "balanced")
 
-    lang0 = (lang or "en").lower()
-    out = []
-    for r in data:
-        if not isinstance(r, dict):
-            continue
-        eta_hhmm = str(r.get("eta", "") or "")
-        mins = _eta_minutes_from_hhmm(now_hk, eta_hhmm)
-        rmk = (
-            r.get("rmk_en")
-            if lang0 == "en"
-            else r.get("rmk_tc") if lang0 in ("tc", "zh") else r.get("rmk_sc")
-        )
-        out.append(
-            {
-                "minutes": mins,
-                "iso": None,
-                "eta_hhmm": eta_hhmm or None,
-                "depart_hhmm": r.get("depart_time"),
-                "route_en": r.get("route_en"),
-                "route_tc": r.get("route_tc"),
-                "remark": rmk,
-                "vesselcode": r.get("vesselcode"),
-            }
-        )
-    out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
-    return out
+        itineraries = []
+        for g in unique_plans:
+            formatted_legs = []
+            g.pop("_sig", None)
+            first_leg = g["legs"][0]
+            live_etas = await self.transit.leg_next_departures(first_leg["company"], first_leg["route_id"], first_leg["board_stop_id"], 0, limit_etas=1, lang=lang)
+            live_wait = live_etas[0].get("eta", {}).get("minutes") if live_etas else None
+            if live_wait is not None:
+                g["actual_time"] = (g["actual_time"] - 5.0) + float(live_wait)
+            for L in g["legs"]:
+                rlt = self.transit.route_lite(L["route_id"])
+                b = self.transit.stop_lite(L["board_stop_id"])
+                a = self.transit.stop_lite(L["alight_stop_id"])
+                formatted_legs.append({"mode": mode_of_company(L["company"]), "operator": L["company"], "route": rlt, "board_stop": b, "alight_stop": a, "next_departures": live_etas if L == first_leg else []})
+            itineraries.append({"tags": g["tags"], "score": round(g["perceived_cost"], 2), "summary": {"transfers": g["transfers"], "walk_m": round(g["walk_m"], 1), "time_min_est": round(g["actual_time"], 1)}, "legs": formatted_legs})
 
+        itineraries.sort(key=lambda x: x["summary"]["time_min_est"])
 
-async def _fortuneferry_next_trip(
-    self, route_code: str, lang: str = "en"
-) -> List[dict]:
-    if not route_code:
-        return []
-    params = {"route": route_code}
-    j = await _request(
-        self,
-        f"{FORTUNEFERRY_BASE}/eta/",
-        params=params,
-        expect="json",
-        cache_ttl_s=30,
-        cache_scope="mem",
-    )
-    if not isinstance(j, dict):
-        return []
-    data = j.get("data")
-    if not isinstance(data, list):
-        return []
-    ts = j.get("generated_timestamp") or (
-        data[0].get("date_timestamp") if data and isinstance(data[0], dict) else None
-    )
-    now_dt = _parse_iso(str(ts or "")) or datetime.now(HK_TZ)
-    if now_dt.tzinfo is None:
-        now_dt = now_dt.replace(tzinfo=HK_TZ)
-    now_hk = now_dt.astimezone(HK_TZ)
+        if __event_emitter__:
+            await __event_emitter__({"type": "status", "data": {"description": "Done.", "done": True}})
 
-    lang0 = (lang or "en").lower()
-    out = []
-    for r in data:
-        if not isinstance(r, dict):
-            continue
-        eta_hhmm = str(r.get("eta", "") or "")
-        mins = _eta_minutes_from_hhmm(now_hk, eta_hhmm)
-        rmk = (
-            r.get("rmk_en")
-            if lang0 == "en"
-            else r.get("rmk_tc") if lang0 in ("tc", "zh") else r.get("rmk_sc")
-        )
-        out.append(
-            {
-                "minutes": mins,
-                "iso": None,
-                "eta_hhmm": eta_hhmm or None,
-                "depart_hhmm": r.get("depart_time"),
-                "route_en": r.get("route_en"),
-                "route_tc": r.get("route_tc"),
-                "remark": rmk,
-                "vesselcode": r.get("vesselcode"),
-            }
-        )
-    out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
-    return out
-
-
-async def _hkkf_next_trip(self, route_id: str, direction: str) -> List[dict]:
-    rid = None
-    try:
-        if str(route_id).strip().isdigit():
-            rid = int(str(route_id).strip())
-    except Exception:
-        rid = None
-    if rid is None:
-        return []
-    dir0 = (direction or "outbound").strip().lower()
-    if dir0 not in ("inbound", "outbound"):
-        dir0 = "outbound"
-
-    url = f"{HKKF_BASE}/opendata/eta/{rid}/{dir0}"
-    j = await _request(self, url, expect="json", cache_ttl_s=30, cache_scope="mem")
-    if not isinstance(j, dict):
-        return []
-    data = j.get("data")
-    if not isinstance(data, list):
-        return []
-    out = []
-    for r in data:
-        if not isinstance(r, dict):
-            continue
-        iso = r.get("ETA")
-        mins = _eta_minutes(str(iso)) if iso else None
-        out.append(
-            {
-                "minutes": mins,
-                "iso": iso,
-                "route_id": r.get("route_id"),
-                "direction": r.get("direction"),
-                "session_time": r.get("session_time"),
-                "date": r.get("date"),
-            }
-        )
-    out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
-    return out
-
-
-async def _leg_next_departures(
-    self,
-    company: str,
-    route_id: str,
-    board_stop_id: str,
-    board_seq: int,
-    limit_etas: int = 2,
-    lang: str = "en",
-) -> List[dict]:
-    """
-    Compact per-leg ETA fetch (avoids stop fan-out).
-
-    For LLMs: This is an internal helper (NOT a tool). Use td_departures_by_stop / td_departures_nearby instead.
-    """
-    r = self._route_list.get(route_id, {})
-    if not isinstance(r, dict):
-        return []
-
-    co = _norm_co(company)
-    route_no = str(r.get("route", "") or "")
-    bounds = r.get("bound", {}) if isinstance(r.get("bound"), dict) else {}
-    bound = str(bounds.get(co, bounds.get(co.lower(), "")) or "")
-
-    out: List[dict] = []
-
-    # Bus / minibus (existing)
-    if co == "kmb":
-        observed_st = str(r.get("serviceType", "") or "").strip()
-        arr = await _kmb_etas(
-            self, board_stop_id, route_no, bound, board_seq, observed_st
-        )
-        for e in arr[:limit_etas]:
-            eta_iso = e.get("eta")
-            mins = _eta_minutes(eta_iso)
-            out.append(
-                {
-                    "stop_id": board_stop_id,
-                    "route_id": route_id,
-                    "route": route_no,
-                    "company": "kmb",
-                    "mode": _mode_of_company("kmb"),
-                    "direction": bound or None,
-                    "service_type_used": 1,
-                    "eta": {
-                        "iso": eta_iso,
-                        "minutes": mins,
-                        "text": (f"{mins} min" if mins is not None else None),
-                    },
-                    "remark": {
-                        "en": e.get("rmk_en") or "",
-                        "zh": e.get("rmk_tc") or "",
-                    },
-                }
-            )
-        return out
-
-    if co == "ctb":
-        arr = await _ctb_etas(self, board_stop_id, route_no, bound, board_seq)
-        for e in arr[:limit_etas]:
-            eta_iso = e.get("eta")
-            mins = _eta_minutes(eta_iso)
-            out.append(
-                {
-                    "stop_id": board_stop_id,
-                    "route_id": route_id,
-                    "route": route_no,
-                    "company": "ctb",
-                    "mode": _mode_of_company("ctb"),
-                    "direction": e.get("dir") or bound or None,
-                    "service_type_used": 1,
-                    "eta": {
-                        "iso": eta_iso,
-                        "minutes": mins,
-                        "text": (f"{mins} min" if mins is not None else None),
-                    },
-                    "remark": {
-                        "en": e.get("rmk_en") or "",
-                        "zh": e.get("rmk_tc") or "",
-                    },
-                }
-            )
-        return out
-
-    if co == "gmb":
-        gtfs_id = str(r.get("gtfsId", "") or "").strip()
-        if not gtfs_id:
-            return []
-        arr = await _gmb_etas(self, board_stop_id, gtfs_id, bound, board_seq)
-        for e in arr[:limit_etas]:
-            eta_iso = e.get("eta") or None
-            mins = _eta_minutes(eta_iso) if eta_iso else None
-            out.append(
-                {
-                    "stop_id": board_stop_id,
-                    "route_id": route_id,
-                    "route": route_no,
-                    "company": "gmb",
-                    "mode": _mode_of_company("gmb"),
-                    "direction": bound or None,
-                    "service_type_used": 1,
-                    "eta": {
-                        "iso": eta_iso,
-                        "minutes": mins,
-                        "text": (f"{mins} min" if mins is not None else None),
-                    },
-                    "remark": {
-                        "en": e.get("rmk_en") or "",
-                        "zh": e.get("rmk_tc") or "",
-                    },
-                }
-            )
-        return out
-
-    # Rail (MTR heavy rail)
-    if co == "mtr":
-        trains = await _mtr_next_trains(self, route_no, board_stop_id, lang=lang)
-        for t in trains[:limit_etas]:
-            mins = t.get("minutes")
-            iso = t.get("iso")
-            dest = t.get("dest")
-            plat = t.get("platform")
-            msg = t.get("message") or ""
-            out.append(
-                {
-                    "stop_id": board_stop_id,
-                    "route_id": route_id,
-                    "route": route_no,
-                    "company": "mtr",
-                    "mode": _mode_of_company("mtr"),
-                    "direction": t.get("direction"),
-                    "service_type_used": 1,
-                    "eta": {
-                        "iso": iso,
-                        "minutes": mins,
-                        "text": (f"{mins} min" if isinstance(mins, int) else None),
-                    },
-                    "platform": plat,
-                    "dest": dest,
-                    "remark": {"en": msg, "zh": msg},
-                    "url": t.get("url"),
-                }
-            )
-        return out
-
-    # Light Rail
-    if co == "lightrail":
-        station_id = None
-        try:
-            if str(board_stop_id).strip().isdigit():
-                station_id = int(str(board_stop_id).strip())
-        except Exception:
-            station_id = None
-        if station_id is None:
-            return []
-        trains = await _lrt_next_trains(self, station_id)
-        # filter to leg route_no if possible
-        filtered = [
-            x for x in trains if str(x.get("route_no") or "") == route_no
-        ] or trains
-        for t in filtered[:limit_etas]:
-            mins = t.get("minutes")
-            text = t.get("text")
-            out.append(
-                {
-                    "stop_id": board_stop_id,
-                    "route_id": route_id,
-                    "route": route_no,
-                    "company": "lightrail",
-                    "mode": _mode_of_company("lightrail"),
-                    "direction": None,
-                    "service_type_used": 1,
-                    "eta": {"iso": None, "minutes": mins, "text": text},
-                    "platform": t.get("platform"),
-                    "dest": t.get("dest_en"),
-                    "remark": {"en": "", "zh": ""},
-                }
-            )
-        return out
-
-    # MTR Bus / Feeder Bus
-    if co == "lrtfeeder":
-        buses = await _mtr_bus_next_buses(self, route_no, board_stop_id, lang=lang)
-        for b in buses[:limit_etas]:
-            mins = b.get("minutes")
-            txt = b.get("text")
-            out.append(
-                {
-                    "stop_id": board_stop_id,
-                    "route_id": route_id,
-                    "route": route_no,
-                    "company": "lrtfeeder",
-                    "mode": _mode_of_company("lrtfeeder"),
-                    "direction": None,
-                    "service_type_used": 1,
-                    "eta": {"iso": None, "minutes": mins, "text": txt},
-                    "remark": {
-                        "en": str(b.get("remark") or ""),
-                        "zh": str(b.get("remark") or ""),
-                    },
-                }
-            )
-        return out
-
-    # Ferries
-    if co == "sunferry":
-        trips = await _sunferry_next_trip(self, route_no, lang=lang)
-        for t in trips[:limit_etas]:
-            mins = t.get("minutes")
-            out.append(
-                {
-                    "stop_id": board_stop_id,
-                    "route_id": route_id,
-                    "route": route_no,
-                    "company": "sunferry",
-                    "mode": _mode_of_company("sunferry"),
-                    "direction": None,
-                    "service_type_used": 1,
-                    "eta": {
-                        "iso": None,
-                        "minutes": mins,
-                        "text": (t.get("eta_hhmm") or None),
-                    },
-                    "remark": {
-                        "en": str(t.get("remark") or ""),
-                        "zh": str(t.get("remark") or ""),
-                    },
-                }
-            )
-        return out
-
-    if co == "fortuneferry":
-        trips = await _fortuneferry_next_trip(self, route_no, lang=lang)
-        for t in trips[:limit_etas]:
-            mins = t.get("minutes")
-            out.append(
-                {
-                    "stop_id": board_stop_id,
-                    "route_id": route_id,
-                    "route": route_no,
-                    "company": "fortuneferry",
-                    "mode": _mode_of_company("fortuneferry"),
-                    "direction": None,
-                    "service_type_used": 1,
-                    "eta": {
-                        "iso": None,
-                        "minutes": mins,
-                        "text": (t.get("eta_hhmm") or None),
-                    },
-                    "remark": {
-                        "en": str(t.get("remark") or ""),
-                        "zh": str(t.get("remark") or ""),
-                    },
-                }
-            )
-        return out
-
-    if co == "hkkf":
-        # hkbus route field is expected to be the HKKF route_id (numeric). Direction is inbound/outbound (best-effort).
-        direction = bound.strip().lower() if bound else "outbound"
-        trips = await _hkkf_next_trip(self, route_no, direction=direction)
-        for t in trips[:limit_etas]:
-            mins = t.get("minutes")
-            iso = t.get("iso")
-            out.append(
-                {
-                    "stop_id": board_stop_id,
-                    "route_id": route_id,
-                    "route": route_no,
-                    "company": "hkkf",
-                    "mode": _mode_of_company("hkkf"),
-                    "direction": t.get("direction") or direction,
-                    "service_type_used": 1,
-                    "eta": {
-                        "iso": iso,
-                        "minutes": mins,
-                        "text": (f"{mins} min" if isinstance(mins, int) else None),
-                    },
-                    "remark": {"en": "", "zh": ""},
-                }
-            )
-        return out
-
-    return out
+        return {"meta": {}, "origin": {"label": origin_place}, "destination": {"label": destination_place}, "itineraries": itineraries[:limit]}
 
 
 # ============================================================
@@ -3181,32 +2105,18 @@ class Tools:
 
     def __init__(self):
         self.valves = self.Valves()
-        _safe_mkdir(Path(self.valves.cache_dir))
-
-        self._db_lock = asyncio.Lock()
-        self._mem_lock = asyncio.Lock()
-        self._mem: Dict[str, Tuple[float, Any]] = {}
-
-        self._db_loaded = False
-        self._db_source = None
-        self._db_md5 = None
-
-        self._stop_list: Dict[str, dict] = {}
-        self._route_list: Dict[str, dict] = {}
-        self._stop_to_routes: Dict[str, List[StopOcc]] = {}
-        self._route_company_stops: Dict[Tuple[str, str], List[str]] = {}
-        self._route_company_stop_index: Dict[Tuple[str, str], Dict[str, int]] = {}
-        self._stop_degree: Dict[str, int] = {}
-        self._grid: Dict[Tuple[int, int], List[str]] = {}
-        self._grid_cell: float = 0.004
-        self._transfer_edges: Dict[str, List[Tuple[str, float]]] = {}
-
-        self._client: Optional[httpx.AsyncClient] = None
-
+        safe_mkdir(Path(self.valves.cache_dir))
         self.http = HTTPClient(self.valves, self.valves.cache_dir)
         self.hko = HKOClient(self.http)
         self.landsd = LandsDClient(self.http)
         self.transit = TransitDB(self.http, self.valves)
+        self.planner = TripPlanner(self.transit, self.landsd, self.valves)
+
+    def meta(self, source: Optional[str] = None) -> dict:
+        base = {"tool": "Hong Kong Open Data", "version": "0.6.0", "ts": int(now_s())}
+        if source == "td":
+            return {**base, "data_source": "hkbus DB + Transport Department APIs", **self.transit.meta()}
+        return base
 
     # =========================
     # HKO: Weather / Open Data API
@@ -3255,8 +2165,8 @@ class Tools:
             data_type = "rhrread"
         endpoint = "weather.php"
         params = {"dataType": data_type, "lang": lang}
-        j = await _hko_get(self, endpoint, params)
-        return {"meta": _meta(self), "data": j}
+        j = await self.hko._get(endpoint, params)
+        return {"meta": self.meta(source="hko"), "data": j}
 
     async def hko_earthquake(
         self,
@@ -3288,8 +2198,8 @@ class Tools:
         """
         endpoint = "earthquake.php"
         params = {"dataType": data_type, "lang": lang}
-        j = await _hko_get(self, endpoint, params)
-        return {"meta": _meta(self), "data": j}
+        j = await self.hko._get(endpoint, params)
+        return {"meta": self.meta(source="hko"), "data": j}
 
     # --- Narrow, descriptive wrappers around `hko_opendata` (recommended for agents) ---
 
@@ -4141,17 +3051,17 @@ class Tools:
         endpoint = "opendata.php"
 
         if rformat == "csv":
-            csv_text = await _hko_get_text(self, endpoint, params)
+            csv_text = await self.hko._get_text(endpoint, params)
             out = {
-                "meta": _meta(self),
+                "meta": self.meta(source="hko"),
                 "format": "csv",
                 "data": csv_text,
                 "params": params,
             }
             return out
 
-        j = await _hko_get(self, endpoint, params)
-        out = {"meta": _meta(self), "format": "json", "data": j, "params": params}
+        j = await self.hko._get(endpoint, params)
+        out = {"meta": self.meta(source="hko"), "format": "json", "data": j, "params": params}
         return out
 
     async def hko_lunardate(self, date: str) -> dict:
@@ -4181,8 +3091,8 @@ class Tools:
 
         endpoint = "lunardate.php"
         params = {"date": date.strip()}
-        j = await _hko_get(self, endpoint, params)
-        return {"meta": _meta(self), "data": j}
+        j = await self.hko._get(endpoint, params)
+        return {"meta": self.meta(source="hko"), "data": j}
 
     async def hko_hourly_rainfall(self, lang: Literal["en", "tc", "sc"] = "en") -> dict:
         """
@@ -4204,8 +3114,8 @@ class Tools:
         """
         endpoint = "hourlyRainfall.php"
         params = {"lang": lang}
-        j = await _hko_get(self, endpoint, params)
-        return {"meta": _meta(self), "data": j}
+        j = await self.hko._get(endpoint, params)
+        return {"meta": self.meta(source="hko"), "data": j}
 
     # =========================
     # LandsD: Location Search + Transform
@@ -4224,14 +3134,14 @@ class Tools:
         Example:
           {"query":"Ap Lei Chau","limit":5}
         """
-        rows = await _landsd_location_search(self, query, limit=limit)
+        rows = await self.landsd.location_search(query, limit=limit)
         out = []
         for r in rows:
-            x = _coerce_float(r.get("x"))
-            y = _coerce_float(r.get("y"))
+            x = coerce_float(r.get("x"))
+            y = coerce_float(r.get("y"))
             wgs = None
             if x is not None and y is not None:
-                wgs = await _landsd_transform_hk1980_to_wgs84(self, float(x), float(y))
+                wgs = await self.landsd.transform_hk1980_to_wgs84(float(x), float(y))
             out.append(
                 {
                     "name": {"en": r.get("nameEN"), "zh": r.get("nameZH")},
@@ -4241,7 +3151,7 @@ class Tools:
                     "wgs84": wgs,
                 }
             )
-        return {"meta": _meta(self), "query": query, "items": out}
+        return {"meta": self.meta(source="hko"), "query": query, "items": out}
 
     # =========================
     # TD: hkbus catalog + ETAs + planning
@@ -4253,11 +3163,11 @@ class Tools:
         Example:
           {}
         """
-        await _ensure_eta_db_loaded(self)
+        await self.transit.ensure_loaded()
         return {
-            "meta": _meta(self),
+            "meta": self.meta(source="hko"),
             "operators_seen": sorted(
-                {o.company for occs in self._stop_to_routes.values() for o in occs}
+                {o.company for occs in self.transit._stop_to_routes.values() for o in occs}
             ),
             "modes": sorted(set(COMPANY_MODE.values())),
         }
@@ -4278,31 +3188,31 @@ class Tools:
         Example:
           {"query":"Central","limit":10}
         """
-        await _ensure_eta_db_loaded(self)
-        q = _normalize_text(query)
+        await self.transit.ensure_loaded()
+        q = normalize_text(query)
         if not q:
-            return {"meta": _meta(self), "items": [], "next_cursor": None}
+            return {"meta": self.meta(source="hko"), "items": [], "next_cursor": None}
 
-        qkey, offset = _cursor_parse(cursor)
+        qkey, offset = cursor_parse(cursor)
         if qkey and qkey != "q":
             offset = 0
 
         hits = []
-        for sid, s in self._stop_list.items():
+        for sid, s in self.transit._stop_list.items():
             if not isinstance(s, dict):
                 continue
             name = s.get("name") or {}
-            en = _normalize_text(str(name.get("en", "") or ""))
-            zh = _normalize_text(str(name.get("zh", "") or ""))
+            en = normalize_text(str(name.get("en", "") or ""))
+            zh = normalize_text(str(name.get("zh", "") or ""))
             if q in en or q in zh:
-                hits.append(_stop_lite(self, str(sid)))
+                hits.append(self.transit.stop_lite(str(sid)))
         hits = [x for x in hits if x]
         hits.sort(key=lambda x: x["display"])
-        sliced, next_cursor = _limit_items(hits, offset, limit)
+        sliced, next_cursor = limit_items(hits, offset, limit)
         if next_cursor:
-            next_cursor = _cursor_make("q", offset + len(sliced))
+            next_cursor = cursor_make("q", offset + len(sliced))
         return {
-            "meta": _meta(self),
+            "meta": self.meta(source="hko"),
             "query": query,
             "items": sliced,
             "next_cursor": next_cursor,
@@ -4329,7 +3239,7 @@ class Tools:
         Example:
           {"place_name":"Ap Lei Chau","radius_m":500,"limit":20}
         """
-        await _ensure_eta_db_loaded(self)
+        await self.transit.ensure_loaded()
         limit = max(1, min(int(limit), 50))
         radius_m = max(50, int(radius_m))
 
@@ -4338,16 +3248,16 @@ class Tools:
         lon = None
 
         if wgs84 and isinstance(wgs84, dict):
-            lat = _coerce_float(wgs84.get("lat"))
-            lon = _coerce_float(wgs84.get("lon"))
+            lat = coerce_float(wgs84.get("lat"))
+            lon = coerce_float(wgs84.get("lon"))
             resolved = {"input": {"wgs84": {"lat": lat, "lon": lon}}}
         elif place_name:
             loc = await self.landsd_location_search(place_name, limit=1)
             items = loc.get("items", []) if isinstance(loc, dict) else []
             if items and isinstance(items[0], dict):
                 w = items[0].get("wgs84") or {}
-                lat = _coerce_float(w.get("lat"))
-                lon = _coerce_float(w.get("lon"))
+                lat = coerce_float(w.get("lat"))
+                lon = coerce_float(w.get("lon"))
                 resolved = {"input": {"place_name": place_name}, "best_match": items[0]}
         else:
             return {"error": "bad_request", "detail": "Provide place_name or wgs84."}
@@ -4358,18 +3268,18 @@ class Tools:
                 "detail": "Failed to resolve WGS84 coordinate.",
             }
 
-        nearby = _nearby_stop_ids(
-            self, float(lat), float(lon), radius_m=radius_m, limit=limit
+        nearby = self.transit.nearby_stop_ids(
+            float(lat), float(lon), radius_m=radius_m, limit=limit
         )
         out = []
         for sid, dist in nearby:
-            s = _stop_lite(self, sid)
+            s = self.transit.stop_lite(sid)
             if not s:
                 continue
             s["distance_m"] = round(float(dist), 1)
             out.append(s)
         return {
-            "meta": _meta(self),
+            "meta": self.meta(source="hko"),
             "resolved_location": {
                 "wgs84": {"lat": float(lat), "lon": float(lon)},
                 "details": resolved,
@@ -4388,11 +3298,11 @@ class Tools:
         Example:
           {"route_id":"TCL+1+Hong Kong+Tung Chung"}
         """
-        await _ensure_eta_db_loaded(self)
-        r = _route_lite(self, route_id)
+        await self.transit.ensure_loaded()
+        r = self.transit.route_lite(route_id)
         if not r:
             return {"error": "route_not_found", "detail": "Unknown route_id."}
-        return {"meta": _meta(self), "route": r}
+        return {"meta": self.meta(source="hko"), "route": r}
 
     async def td_route_search(
         self, query: str, limit: int = 20, cursor: Optional[str] = None
@@ -4410,31 +3320,31 @@ class Tools:
         Example:
           {"query":"TCL","limit":10}
         """
-        await _ensure_eta_db_loaded(self)
-        q = _normalize_text(query)
+        await self.transit.ensure_loaded()
+        q = normalize_text(query)
         if not q:
-            return {"meta": _meta(self), "items": [], "next_cursor": None}
+            return {"meta": self.meta(source="hko"), "items": [], "next_cursor": None}
 
-        qkey, offset = _cursor_parse(cursor)
+        qkey, offset = cursor_parse(cursor)
         if qkey and qkey != "q":
             offset = 0
 
         hits = []
-        for rid, r in self._route_list.items():
+        for rid, r in self.transit._route_list.items():
             if not isinstance(r, dict):
                 continue
-            route_no = _normalize_text(str(r.get("route", "") or ""))
-            orig_en = _normalize_text(str((r.get("orig") or {}).get("en", "") or ""))
-            dest_en = _normalize_text(str((r.get("dest") or {}).get("en", "") or ""))
+            route_no = normalize_text(str(r.get("route", "") or ""))
+            orig_en = normalize_text(str((r.get("orig") or {}).get("en", "") or ""))
+            dest_en = normalize_text(str((r.get("dest") or {}).get("en", "") or ""))
             if q in route_no or q in orig_en or q in dest_en:
-                hits.append(_route_lite(self, str(rid)))
+                hits.append(self.transit.route_lite(str(rid)))
         hits = [x for x in hits if x]
         hits.sort(key=lambda x: (x.get("route") or "", x.get("route_id") or ""))
-        sliced, next_cursor = _limit_items(hits, offset, limit)
+        sliced, next_cursor = limit_items(hits, offset, limit)
         if next_cursor:
-            next_cursor = _cursor_make("q", offset + len(sliced))
+            next_cursor = cursor_make("q", offset + len(sliced))
         return {
-            "meta": _meta(self),
+            "meta": self.meta(source="hko"),
             "query": query,
             "items": sliced,
             "next_cursor": next_cursor,
@@ -4480,11 +3390,11 @@ class Tools:
           - This returns a compact, normalized list suitable for conversational answers.
           - KMB service_type is treated as optional/opaque; regular service (1) is preferred automatically.
         """
-        await _ensure_eta_db_loaded(self)
+        await self.transit.ensure_loaded()
         limit_routes = max(1, min(int(limit_routes), 20))
         limit_etas_per_route = max(1, min(int(limit_etas_per_route), 4))
 
-        stop = _stop_lite(self, stop_id)
+        stop = self.transit.stop_lite(stop_id)
         if not stop:
             return {"error": "stop_not_found", "detail": "Unknown stop_id."}
 
@@ -4492,7 +3402,7 @@ class Tools:
         op_filter = None
         if operators:
             op_filter = {
-                _norm_co(x) for x in operators if isinstance(x, str) and x.strip()
+                norm_co(x) for x in operators if isinstance(x, str) and x.strip()
             }
         mode_filter = None
         if modes:
@@ -4505,11 +3415,11 @@ class Tools:
         def allowed_company(co_norm: str) -> bool:
             if op_filter is not None and co_norm not in op_filter:
                 return False
-            if mode_filter is not None and _mode_of_company(co_norm) not in mode_filter:
+            if mode_filter is not None and mode_of_company(co_norm) not in mode_filter:
                 return False
             return True
 
-        occs = self._stop_to_routes.get(stop_id, [])
+        occs = self.transit._stop_to_routes.get(stop_id, [])
 
         # Companies we can provide real-time-ish ETAs for (others may still appear in planning)
         eta_capable = {
@@ -4539,7 +3449,7 @@ class Tools:
             if not allowed_company(co):
                 continue
             if co == "mtr":
-                r = self._route_list.get(occ.route_id, {})
+                r = self.transit._route_list.get(occ.route_id, {})
                 if isinstance(r, dict):
                     line = str(r.get("route", "") or "").strip()
                     if line:
@@ -4552,7 +3462,7 @@ class Tools:
         # deterministic ranking for generic services
         def rk_service(x):
             rid, co, _ = x
-            r = self._route_list.get(rid, {})
+            r = self.transit._route_list.get(rid, {})
             route_no = str(r.get("route", "") or "") if isinstance(r, dict) else ""
             return (co, route_no, rid)
 
@@ -4576,8 +3486,7 @@ class Tools:
         for line, rid in sorted(mtr_lines.items()):
             if len(departures) >= limit_routes:
                 break
-            rows = await _leg_next_departures(
-                self, "mtr", rid, stop_id, 0, limit_etas=limit_etas_per_route, lang=lang
+            rows = await self.transit.leg_next_departures("mtr", rid, stop_id, 0, limit_etas=limit_etas_per_route, lang=lang
             )
             departures.extend(rows[:limit_etas_per_route])
 
@@ -4588,7 +3497,7 @@ class Tools:
             except Exception:
                 station_id = None
             if station_id is not None:
-                lrt_rows = await _lrt_next_trains(self, station_id)
+                lrt_rows = await self.transit.lrt_next_trains(station_id)
                 # Convert to same schema
                 for r in lrt_rows[: max(0, limit_routes - len(departures))]:
                     departures.append(
@@ -4597,7 +3506,7 @@ class Tools:
                             "route_id": None,
                             "route": r.get("route_no"),
                             "company": "lightrail",
-                            "mode": _mode_of_company("lightrail"),
+                            "mode": mode_of_company("lightrail"),
                             "direction": None,
                             "service_type_used": 1,
                             "eta": {
@@ -4618,8 +3527,7 @@ class Tools:
 
         async def one(rid: str, co: str, seq: int) -> List[dict]:
             async with sem:
-                return await _leg_next_departures(
-                    self,
+                return await self.transit.leg_next_departures(
                     co,
                     rid,
                     stop_id,
@@ -4638,7 +3546,7 @@ class Tools:
             if len(departures) >= limit_routes:
                 break
 
-        return {"meta": _meta(self), "stop": stop, "departures": departures}
+        return {"meta": self.meta(source="hko"), "stop": stop, "departures": departures}
 
     async def td_departures_nearby(
         self,
@@ -4671,7 +3579,7 @@ class Tools:
         Example call:
           {"place_name":"Ap Lei Chau","radius_m":300,"limit_stops":5,"modes":["rail","bus"],"lang":"en"}
         """
-        await _ensure_eta_db_loaded(self)
+        await self.transit.ensure_loaded()
         limit_stops = max(1, min(int(limit_stops), 10))
         limit_routes_per_stop = max(1, min(int(limit_routes_per_stop), 10))
         limit_etas_per_route = max(1, min(int(limit_etas_per_route), 4))
@@ -4727,7 +3635,7 @@ class Tools:
             )
 
         return {
-            "meta": _meta(self),
+            "meta": self.meta(source="hko"),
             "resolved_location": near.get("resolved_location"),
             "radius_m": radius_m,
             "stops": items,
@@ -4800,743 +3708,8 @@ class Tools:
                 "lang": "tc"
             }
         """
-        import heapq
 
-        await _ensure_eta_db_loaded(self)
-        preferences = preferences or {}
-
-        limit = max(1, min(int(limit), 5))
-        max_transfers = int(max_transfers) if max_transfers is not None else 6
-        MAX_EXPANSIONS = 150000  # High limit for cross-territory searches
-
-        # --- Human-Centric Scoring Weights ---
-        WALK_SPEED_M_PER_MIN = 80.0
-        WALK_WEIGHT = 1.5  # Walking feels 50% longer than riding
-        WAIT_WEIGHT = 1.5  # Waiting feels 50% longer than riding
-        RIDE_WEIGHT = 1.0  # Baseline
-
-        def get_transfer_penalty(from_mode: Optional[str], to_mode: str) -> float:
-            """Returns artificial 'perceived minutes' added to the cost of a transfer."""
-            if not from_mode:
-                return 0.0  # Initial boarding, no transfer penalty
-            if from_mode == "rail" and to_mode == "rail":
-                return 3.0  # MTR to MTR is usually an easy air-conditioned walk
-            if "bus" in from_mode and "bus" in to_mode:
-                return 10.0  # Bus to Bus requires finding a new pole on the street
-            if "ferry" in from_mode or "ferry" in to_mode:
-                return 6.0  # Piers are obvious but require some walking
-            return 8.0  # Default inter-modal penalty (e.g., Rail to Bus)
-
-        def get_mode_times(company: str, ride_stops: int) -> tuple[float, float]:
-            """Returns (wait_time_minutes, ride_time_minutes) based on operator."""
-            mode = _mode_of_company(company)
-            if mode == "rail":
-                # High frequency, fast transit, no traffic
-                return 3.0, ride_stops * 1.8
-            elif mode == "minibus":
-                # Decent frequency, fast acceleration, skips stops
-                return 6.0, ride_stops * 1.5
-            elif mode == "ferry":
-                if company in ("starferry", "sunferry"):
-                    # More frequent services for Star Ferry and Sun Ferry
-                    return 30.0, ride_stops * 12.0
-                else:
-                    # Assign high waiting times for other ferries
-                    return 60.0, ride_stops * 15.0
-            elif mode == "lightrail":
-                return 5.0, ride_stops * 1.5
-            else:
-                # Buses (kmb, ctb, nlb, etc.): Subject to traffic, lower frequency
-                return 8.0, ride_stops * 2.5
-
-        def is_rail_station(stop_id: str) -> bool:
-            """Check if the stop is served by MTR heavy rail."""
-            for occ in self._stop_to_routes.get(stop_id, []):
-                if occ.company == "mtr":
-                    return True
-            return False
-
-        def calculate_walk_cost(distance_m: float, target_stop_id: str) -> float:
-            """Calculates perceived cost, giving a heavy discount to MTR stations."""
-            effective_dist = distance_m
-            if is_rail_station(target_stop_id) and distance_m > 150.0:
-                # Subtract 250m to simulate walking through the underground concourse
-                effective_dist = max(50.0, distance_m - 250.0)
-
-            walk_time = effective_dist / WALK_SPEED_M_PER_MIN
-            return walk_time * WALK_WEIGHT
-
-        def get_mode_bit(co: str) -> int:
-            m = _mode_of_company(co)
-            return 1 if m == "rail" else 2 if m == "bus" else 4 if m == "ferry" else 8
-
-        def _is_operating_now_based_on_freq(
-            freq_data: dict,
-            expected_bound: str = "",
-            projected_dt: Optional[datetime] = None,
-        ) -> bool:
-            """
-            Evaluates if a route is scheduled to operate at the projected HK time.
-            """
-            if not freq_data or not isinstance(freq_data, dict):
-                return True
-
-            # Use the projected future time if provided, otherwise fallback to now
-            now_hk = projected_dt or datetime.now(HK_TZ)
-            hour = now_hk.hour
-            day_of_week = now_hk.weekday()  # 0 = Monday, 6 = Sunday
-
-            # Handle GTFS overnight schedules: 00:00 - 03:59 is 24:00 - 27:59 of the PREVIOUS day.
-            if hour < 4:
-                hour += 24
-                day_of_week = (day_of_week - 1) % 7
-
-            current_time_str = f"{hour:02d}{now_hk.minute:02d}"
-
-            # Bitmask: Mon=1, Tue=2, Wed=4, Thu=8, Fri=16, Sat=32, Sun=64
-            today_bit = 1 << day_of_week
-
-            # If the specific bound isn't in freq_data, check all bounds as a safe fallback
-            bounds_to_check = (
-                [expected_bound]
-                if expected_bound and expected_bound in freq_data
-                else freq_data.keys()
-            )
-
-            for b in bounds_to_check:
-                bound_schedules = freq_data.get(b, {})
-                if not isinstance(bound_schedules, dict):
-                    continue
-
-                matching_schedules = []
-                for day_mask_str, schedule in bound_schedules.items():
-                    try:
-                        day_mask = int(day_mask_str)
-                        # Check if today's bit is active.
-                        # We also include 128 (Holiday) and 256 (Non-Holiday) to prevent falsely pruning special services.
-                        if (
-                            (day_mask & today_bit) > 0
-                            or (day_mask & 128) > 0
-                            or (day_mask & 256) > 0
-                        ):
-                            matching_schedules.append(schedule)
-                    except ValueError:
-                        # Fallback if raw GTFS service_id strings ("WD", "SU") are used instead of bitmasks
-                        return True
-
-                # Check if current time falls within any active schedule blocks for this bound
-                for schedule in matching_schedules:
-                    if not isinstance(schedule, dict):
-                        continue
-
-                    fixed_times = []
-                    for start_str, value in schedule.items():
-                        # Fixed departure (from trips.txt)
-                        if value is None:
-                            fixed_times.append(start_str)
-                        # Interval block (from frequencies.txt) e.g., ["2359", 720]
-                        elif isinstance(value, list) and len(value) >= 1:
-                            end_str = str(value[0])
-                            if start_str <= current_time_str <= end_str:
-                                return True
-
-                    # If the route relies strictly on fixed departures, check if we are
-                    # within the bounds of the first and last bus of the day.
-                    if fixed_times:
-                        if min(fixed_times) <= current_time_str <= max(fixed_times):
-                            return True
-
-            # If we fall through the loops, the route is scheduled, but currently off-hours
-            return False
-
-        # --- Phase 1: KNN Coordinate Resolution ---
-        if __event_emitter__:
-            await __event_emitter__(
-                {
-                    "type": "status",
-                    "data": {"description": "Resolving locations…", "done": False},
-                }
-            )
-
-        o_loc = await self.landsd_location_search(origin_place, limit=1)
-        d_loc = await self.landsd_location_search(destination_place, limit=1)
-
-        def _get_pt(loc_resp) -> Optional[Tuple[float, float]]:
-            items = loc_resp.get("items", []) if isinstance(loc_resp, dict) else []
-            if not items:
-                return None
-            w = items[0].get("wgs84") or {}
-            lat, lon = _coerce_float(w.get("lat")), _coerce_float(w.get("lon"))
-            return (lat, lon) if lat and lon else None
-
-        o_pt = _get_pt(o_loc)
-        d_pt = _get_pt(d_loc)
-
-        if not o_pt or not d_pt:
-            return {
-                "error": "location_not_found",
-                "detail": "Could not resolve WGS84 coordinates for origin/destination.",
-            }
-
-        # KNN Binding: Prioritize stops within 800m, fallback to larger radius for extreme remote areas
-        def _get_knn_stops(pt, k=25, max_radius=800):
-            near = _nearby_stop_ids(self, pt[0], pt[1], radius_m=max_radius, limit=k)
-            if not near:
-                # Wilderness fallback: find the absolute closest 3 stops within 4000m
-                near = _nearby_stop_ids(self, pt[0], pt[1], radius_m=4000, limit=3)
-            return {sid: dist for sid, dist in near}
-
-        o_candidates = _get_knn_stops(o_pt, k=25)
-        d_candidates = _get_knn_stops(d_pt, k=25)
-        d_set = set(d_candidates.keys())
-
-        o_candidates = _get_knn_stops(o_pt, k=25)
-        d_candidates = _get_knn_stops(d_pt, k=25)
-        d_set = set(d_candidates.keys())
-
-        # --- Phase 2: A* Search Setup & Feeder Synthesis ---
-
-        # Synthesize feeder tails to escape the A* heuristic trap for remote areas (e.g., Sai Kung -> Hoi Ha)
-        approach_goal_tails = {}
-        for dsid in d_set:
-            for occ in self._stop_to_routes.get(dsid, []):
-                co, rid = occ.company, occ.route_id
-                seq_list = self._route_company_stops.get((rid, co), [])
-                idxmap = self._route_company_stop_index.get((rid, co), {})
-                di = idxmap.get(dsid)
-                if di is not None:
-                    # Grab stops up to 80 stops upstream
-                    for back in range(1, 80):
-                        bi = int(di) - back
-                        if bi < 0:
-                            break
-                        bsid = seq_list[bi]
-                        if bsid == dsid:
-                            continue
-                        approach_goal_tails.setdefault(bsid, []).append(
-                            {
-                                "company": co,
-                                "route_id": rid,
-                                "board_stop_id": bsid,
-                                "alight_stop_id": dsid,
-                                "board_seq": bi,
-                                "alight_seq": int(di),
-                            }
-                        )
-
-        def h_time(stop_id: str) -> float:
-            # Admissible heuristic: Haversine distance / Max HK Transit Speed (~800m / min)
-            s = self._stop_list.get(stop_id)
-            if not isinstance(s, dict):
-                return 0.0
-            loc = s.get("location") or {}
-            lat, lon = _coerce_float(loc.get("lat")), _coerce_float(loc.get("lng"))
-            if not lat or not lon:
-                return 0.0
-            return _haversine_m(lat, lon, d_pt[0], d_pt[1]) / 800.0
-
-        pq = []
-        push_id = 0
-        pareto_visited = {}
-
-        # Seed PQ
-        for sid, ow in o_candidates.items():
-            actual_t0 = ow / WALK_SPEED_M_PER_MIN
-            cost0 = calculate_walk_cost(float(ow), sid)
-            st = {
-                "cur": sid,
-                "walk": float(ow),
-                "actual_time": float(actual_t0),
-                "perceived_cost": cost0,
-                "tx": 0,
-                "modes": 0,
-                "legs": [],
-                "last_was_walk": True,
-            }
-            f_score = cost0 + (h_time(sid) * 1.5)
-            heapq.heappush(
-                pq, (f_score, cost0, st["actual_time"], st["walk"], push_id, st)
-            )
-            pareto_visited[sid] = [(st["walk"], cost0, 0, 0)]
-            push_id += 1
-
-        if __event_emitter__:
-            await __event_emitter__(
-                {
-                    "type": "status",
-                    "data": {
-                        "description": "Running Multi-Criteria A* Search…",
-                        "done": False,
-                    },
-                }
-            )
-
-        # --- Phase 3: Pareto A* Search ---
-        best_goals = []
-        expansions = 0
-        global_best_cost = float("inf")  # Track the best path to prune bad branches
-
-        # Setup Lazy ETA Validation for the Candidate Stage
-        eta_validity_cache = {}
-
-        async def is_leg_active(L: dict) -> bool:
-            co = _norm_co(L["company"])
-            if co not in ("kmb", "ctb", "nlb", "gmb"):
-                return True
-
-            rid = L["route_id"]
-            bid = L["board_stop_id"]
-
-            # Retrieve the accumulated time at the moment of boarding
-            proj_mins = L.get("board_time_minutes", 0.0)
-
-            # Cache using a 30-minute block to prevent infinite API misses for future checks
-            cache_key = (co, rid, bid, int(proj_mins // 30))
-
-            if cache_key in eta_validity_cache:
-                return eta_validity_cache[cache_key]
-
-            r = getattr(self, "_route_list", {}).get(rid, {})
-            route_no = str(r.get("route", "")).strip().upper()
-
-            if not route_no or route_no.endswith("R"):
-                eta_validity_cache[cache_key] = True
-                return True
-
-            freq_data = r.get("freq")
-            is_scheduled_now = True
-
-            # Calculate projected real-world time of boarding
-            projected_dt = datetime.now(HK_TZ) + timedelta(minutes=proj_mins)
-
-            if freq_data:
-                bounds = r.get("bound", {}) if isinstance(r.get("bound"), dict) else {}
-                bound = str(bounds.get(co, bounds.get(co.lower(), "")) or "")
-                is_scheduled_now = _is_operating_now_based_on_freq(
-                    freq_data, bound, projected_dt
-                )
-
-            if not is_scheduled_now:
-                eta_validity_cache[cache_key] = False
-                return False
-
-            board_seq = L.get("board_seq")
-            if board_seq is None:
-                idxmap = getattr(self, "_route_company_stop_index", {}).get(
-                    (rid, co), {}
-                )
-                board_seq = idxmap.get(bid, 0)
-
-            etas = await _leg_next_departures(
-                self, co, rid, bid, board_seq, limit_etas=1, lang=lang
-            )
-            has_live_eta = any(
-                e.get("eta", {}).get("minutes") is not None for e in (etas or [])
-            )
-
-            is_valid = has_live_eta or is_scheduled_now
-
-            eta_validity_cache[cache_key] = is_valid
-            return is_valid
-
-        async def is_candidate_valid(legs: list) -> bool:
-            """Checks a newly completed path to ensure all legs are active."""
-            for L in legs:
-                if not await is_leg_active(L):
-                    return False
-            return True
-
-        while pq and expansions < MAX_EXPANSIONS:
-            f_score, perceived_cost, actual_time, walk_m, _, st = heapq.heappop(pq)
-
-            # Branch and Bound: Prune the search tree if the current frontier is
-            # 25% worse than the best complete route we've already found.
-            if (
-                best_goals
-                and f_score > global_best_cost * 1.25
-                and len(best_goals) >= 10
-            ):
-                break
-
-            cur = st["cur"]
-            tx = st["tx"]
-            modes = st["modes"]
-            expansions += 1
-
-            if expansions % 10 == 0:
-                await asyncio.sleep(0)
-                if __event_emitter__ and expansions % 100 == 0:
-                    msg = f"Running A* Search... (Explored {expansions:,} transit combinations)"
-
-                    await __event_emitter__(
-                        {"type": "status", "data": {"description": msg, "done": False}}
-                    )
-
-            # Goal Check 1: Direct Destination
-            if cur in d_set and st["legs"]:
-                final_walk = float(d_candidates[cur])
-
-                # Apply the Virtual Catchment discount to the final alight!
-                effective_final_walk = final_walk
-                if is_rail_station(cur) and final_walk > 150.0:
-                    effective_final_walk = max(50.0, final_walk - 250.0)
-
-                walk_penalty_multiplier = (
-                    1.0
-                    if effective_final_walk <= 800.0
-                    else (effective_final_walk / 800.0)
-                )
-                final_walk_time = effective_final_walk / WALK_SPEED_M_PER_MIN
-
-                total_walk = (
-                    walk_m + final_walk
-                )  # Keep actual distance for the UI summary
-                total_actual_time = actual_time + final_walk_time
-                total_perceived = perceived_cost + (
-                    final_walk_time * WALK_WEIGHT * walk_penalty_multiplier
-                )
-
-                if total_perceived < global_best_cost:
-                    global_best_cost = total_perceived
-
-                # Validate the path candidate BEFORE accepting it!
-                if not await is_candidate_valid(st["legs"]):
-                    continue  # Ghost route detected. Discard and keep searching!
-
-                if total_perceived < global_best_cost:
-                    global_best_cost = total_perceived
-
-                best_goals.append(
-                    {
-                        "perceived_cost": total_perceived,
-                        "actual_time": total_actual_time,
-                        "walk_m": total_walk,
-                        "transfers": tx,
-                        "legs": list(st["legs"]),
-                        "modes": modes,
-                        "final_stop": cur,
-                    }
-                )
-
-                if final_walk < 300.0:
-                    continue
-
-            # Goal Check 2: Feeder Synthesis (Escape the Heuristic Trap)
-            if cur in approach_goal_tails and st["legs"]:
-                for tail in approach_goal_tails[cur]:
-                    from_mode = _mode_of_company(st["legs"][-1]["company"])
-                    to_mode = _mode_of_company(tail["company"])
-
-                    # Do not increment the hard transfer budget for MTR line changes
-                    ntx = tx
-                    if not (from_mode == "rail" and to_mode == "rail"):
-                        ntx = tx + 1
-
-                    # Now we enforce the max_transfers budget
-                    if ntx > max_transfers:
-                        continue
-
-                    final_stop = tail["alight_stop_id"]
-                    ride_stops = tail["alight_seq"] - tail["board_seq"]
-
-                    # Use dynamic times per transportation mode
-                    wait_time, ride_time = get_mode_times(tail["company"], ride_stops)
-                    tx_penalty = get_transfer_penalty(from_mode, to_mode)
-
-                    final_walk = float(d_candidates.get(final_stop, 0.0))
-
-                    # Apply the Virtual Catchment discount to the tail's alight!
-                    effective_final_walk = final_walk
-                    if is_rail_station(final_stop) and final_walk > 150.0:
-                        effective_final_walk = max(50.0, final_walk - 250.0)
-
-                    final_walk_time = effective_final_walk / WALK_SPEED_M_PER_MIN
-
-                    total_walk = walk_m + final_walk
-                    total_actual_time = (
-                        actual_time + wait_time + ride_time + final_walk_time
-                    )
-
-                    tail_perceived = (
-                        (wait_time * WAIT_WEIGHT)
-                        + (ride_time * RIDE_WEIGHT)
-                        + tx_penalty
-                        + (final_walk_time * WALK_WEIGHT)
-                    )
-                    total_perceived = perceived_cost + tail_perceived
-
-                    # Sync with Branch and Bound optimization
-                    if total_perceived < global_best_cost:
-                        global_best_cost = total_perceived
-
-                    nlegs = list(st["legs"])
-                    tail_copy = tail.copy()
-                    tail_copy["board_time_minutes"] = (
-                        actual_time  # Inject the projected time
-                    )
-                    nlegs.append(tail_copy)
-
-                    # Validate the synthesized path BEFORE accepting it!
-                    if not await is_candidate_valid(nlegs):
-                        continue  # Ghost route detected. Discard and try the next tail!
-
-                    if total_perceived < global_best_cost:
-                        global_best_cost = total_perceived
-
-                    best_goals.append(
-                        {
-                            "perceived_cost": total_perceived,
-                            "actual_time": total_actual_time,
-                            "walk_m": total_walk,
-                            "transfers": ntx,  # Use ntx instead of tx + 1
-                            "legs": nlegs,
-                            "modes": modes | get_mode_bit(tail["company"]),
-                            "final_stop": final_stop,
-                        }
-                    )
-
-            if tx >= max_transfers:
-                continue
-
-            # 1. Walk Transfers (from pre-computed graph)
-            if not st.get("last_was_walk"):  # Prevent successive ghost walks
-                for neighbor, walk_dist in getattr(self, "_transfer_edges", {}).get(
-                    cur, []
-                ):
-                    nw = walk_m + walk_dist
-                    walk_time = walk_dist / WALK_SPEED_M_PER_MIN
-                    nt_actual = actual_time + walk_time
-
-                    leg_cost = calculate_walk_cost(walk_dist, neighbor)
-                    ncost = perceived_cost + leg_cost
-
-                    dominated = False
-                    for pw, pcost, ptx, pm in pareto_visited.get(neighbor, []):
-                        if pw <= nw and pcost <= ncost and ptx <= tx and pm == modes:
-                            dominated = True
-                            break
-
-                    if not dominated:
-                        pareto_visited.setdefault(neighbor, []).append(
-                            (nw, ncost, tx, modes)
-                        )
-                        nst = {
-                            "cur": neighbor,
-                            "walk": nw,
-                            "actual_time": nt_actual,
-                            "perceived_cost": ncost,
-                            "tx": tx,
-                            "modes": modes,
-                            "legs": list(st["legs"]),
-                        }
-                        nf = ncost + (h_time(neighbor) * 1.5)
-                        heapq.heappush(pq, (nf, ncost, nt_actual, nw, push_id, nst))
-                        push_id += 1
-
-            # 2. Ride Expansions
-            for occ in self._stop_to_routes.get(cur, []):
-                rid, co = occ.route_id, occ.company
-
-                # If the last leg we rode was this exact same route, do not alight
-                # just to re-board it. The A* algorithm already calculated staying
-                # on this route to all of its downstream stops!
-                if st["legs"] and st["legs"][-1]["route_id"] == rid:
-                    continue
-
-                to_mode = _mode_of_company(co)
-                mode_bit = get_mode_bit(co)
-                nmodes = modes | mode_bit
-
-                from_mode = (
-                    _mode_of_company(st["legs"][-1]["company"]) if st["legs"] else None
-                )
-                tx_penalty = get_transfer_penalty(from_mode, to_mode)
-
-                # Do not increment the hard transfer budget for MTR line changes
-                ntx = tx
-                if not (from_mode == "rail" and to_mode == "rail"):
-                    ntx = tx + 1
-
-                seq_list = self._route_company_stops.get((rid, co), [])
-                if occ.seq >= len(seq_list):
-                    continue
-
-                for i in range(occ.seq + 1, min(len(seq_list), occ.seq + 120)):
-                    alight_sid = seq_list[i]
-                    ride_stops = i - occ.seq
-
-                    wait_time, ride_time = get_mode_times(co, ride_stops)
-
-                    nt_actual = actual_time + wait_time + ride_time
-                    leg_perceived_cost = (
-                        (wait_time * WAIT_WEIGHT)
-                        + (ride_time * RIDE_WEIGHT)
-                        + tx_penalty
-                    )
-                    ncost = perceived_cost + leg_perceived_cost
-
-                    dominated = False
-                    for pw, pcost, ptx, pm in pareto_visited.get(alight_sid, []):
-                        if (
-                            pw <= walk_m
-                            and pcost <= ncost
-                            and ptx <= ntx
-                            and pm == nmodes
-                        ):
-                            dominated = True
-                            break
-
-                    if not dominated:
-                        pareto_visited.setdefault(alight_sid, []).append(
-                            (walk_m, ncost, ntx, nmodes)
-                        )
-                        nlegs = list(st["legs"])
-                        nlegs.append(
-                            {
-                                "company": co,
-                                "route_id": rid,
-                                "board_stop_id": cur,
-                                "alight_stop_id": alight_sid,
-                                "board_time_minutes": actual_time,  # Inject the projected time
-                            }
-                        )
-                        nst = {
-                            "cur": alight_sid,
-                            "walk": walk_m,
-                            "actual_time": nt_actual,
-                            "perceived_cost": ncost,
-                            "tx": ntx,
-                            "modes": nmodes,
-                            "legs": nlegs,
-                            "last_was_walk": False,
-                        }
-                        nf = ncost + (h_time(alight_sid) * 1.5)
-                        heapq.heappush(pq, (nf, ncost, nt_actual, walk_m, push_id, nst))
-                        push_id += 1
-
-        # --- Phase 4: Semantic Curation & Lazy ETA ---
-        if not best_goals:
-            if __event_emitter__:
-                await __event_emitter__(
-                    {
-                        "type": "status",
-                        "data": {
-                            "description": "Could not find a feasible route.",
-                            "done": True,
-                        },
-                    }
-                )
-            return {
-                "error": "no_route_found",
-                "detail": "Could not find a feasible route.",
-            }
-
-        # Find the champions of each human-centric category
-        champion_fastest = min(best_goals, key=lambda x: x["actual_time"])
-        champion_direct = min(
-            best_goals, key=lambda x: (x["transfers"], x["actual_time"])
-        )
-        champion_lazy = min(best_goals, key=lambda x: (x["walk_m"], x["actual_time"]))
-
-        # Sort the rest by our heavily tuned perceived cost
-        balanced_goals = sorted(best_goals, key=lambda x: x["perceived_cost"])
-
-        unique_plans = []
-        seen_sigs = set()
-
-        def add_plan(g, semantic_tag):
-            sig = ">".join(
-                [
-                    f"{L['company']}:{L['route_id']}:{L['alight_stop_id']}"
-                    for L in g["legs"]
-                ]
-            )
-            if sig in seen_sigs:
-                for plan in unique_plans:
-                    if plan["_sig"] == sig and semantic_tag not in plan["tags"]:
-                        plan["tags"].append(semantic_tag)
-                return
-
-            g_copy = g.copy()
-            g_copy["tags"] = [semantic_tag]
-            g_copy["_sig"] = sig
-            unique_plans.append(g_copy)
-            seen_sigs.add(sig)
-
-        # 1. Force inject the semantic champions
-        add_plan(champion_fastest, "fastest")
-        add_plan(champion_direct, "fewest_transfers")
-        add_plan(champion_lazy, "least_walking")
-
-        # 2. Fill the remaining slots with the best balanced routes
-        for g in balanced_goals:
-            if len(unique_plans) >= limit:
-                break
-            add_plan(g, "balanced")
-
-        # Clean signature and Format
-        itineraries = []
-        for g in unique_plans:
-            formatted_legs = []
-            g.pop("_sig", None)
-
-            # Fetch live ETAs ONLY for the curated top routes (saves massive network time)
-            first_leg = g["legs"][0]
-            live_etas = await _leg_next_departures(
-                self,
-                first_leg["company"],
-                first_leg["route_id"],
-                first_leg["board_stop_id"],
-                0,
-                limit_etas=1,
-                lang=lang,
-            )
-            live_wait = (
-                live_etas[0].get("eta", {}).get("minutes") if live_etas else None
-            )
-            if live_wait is not None:
-                # Adjust actual chronological time based on the real-time wait instead of the 5.0 heuristic
-                g["actual_time"] = (g["actual_time"] - 5.0) + float(live_wait)
-
-            for L in g["legs"]:
-                rlt = _route_lite(self, L["route_id"])
-                b = _stop_lite(self, L["board_stop_id"])
-                a = _stop_lite(self, L["alight_stop_id"])
-                formatted_legs.append(
-                    {
-                        "mode": _mode_of_company(L["company"]),
-                        "operator": L["company"],
-                        "route": rlt,
-                        "board_stop": b,
-                        "alight_stop": a,
-                        "next_departures": live_etas if L == first_leg else [],
-                    }
-                )
-
-            itineraries.append(
-                {
-                    "tags": g["tags"],
-                    "score": round(g["perceived_cost"], 2),
-                    "summary": {
-                        "transfers": g["transfers"],
-                        "walk_m": round(g["walk_m"], 1),
-                        "time_min_est": round(g["actual_time"], 1),
-                    },
-                    "legs": formatted_legs,
-                }
-            )
-
-        # Final sort by chronological time to present nicely to the user
-        itineraries.sort(key=lambda x: x["summary"]["time_min_est"])
-
-        if __event_emitter__:
-            await __event_emitter__(
-                {"type": "status", "data": {"description": "Done.", "done": True}}
-            )
-
-        return {
-            "meta": _meta(self),
-            "origin": {"label": origin_place},
-            "destination": {"label": destination_place},
-            "itineraries": itineraries[:limit],
-        }
+        await self.transit.ensure_loaded()
+        result = await self.planner.plan(origin_place, destination_place, limit, max_transfers, preferences, lang, __event_emitter__)
+        result["meta"] = self.meta(source="td")
+        return result
