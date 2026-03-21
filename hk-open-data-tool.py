@@ -102,6 +102,107 @@ FORTUNEFERRY_BASE = "https://www.hongkongwatertaxi.com.hk"
 # Timezone
 HK_TZ = timezone(timedelta(hours=8))
 
+# Station maps for HKO
+HKO_TIDE_STATIONS: Dict[str, str] = {
+    "CCH": "Cheung Chau",
+    "CLK": "Chek Lap Kok",
+    "CMW": "Chi Ma Wan",
+    "KCT": "Kwai Chung",
+    "KLW": "Ko Lau Wan",
+    "LOP": "Lok On Pai",
+    "MWC": "Ma Wan",
+    "QUB": "Quarry Bay",
+    "SPW": "Shek Pik",
+    "TAO": "Tai O",
+    "TBT": "Tsim Bei Tsui",
+    "TMW": "Tai Miu Wan",
+    "TPK": "Tai Po Kau",
+    "WAG": "Waglan Island",
+}
+
+HKO_CLIMATE_STATIONS: Dict[str, str] = {
+    "CCH": "Cheung Chau",
+    "CWB": "Clear Water Bay",
+    "HKA": "Hong Kong International Airport",
+    "HKO": "Hong Kong Observatory",
+    "HKP": "Hong Kong Park",
+    "HKS": "Wong Chuk Hang",
+    "HPV": "Happy Valley",
+    "JKB": "Tseung Kwan O",
+    "KLT": "Kowloon City",
+    "KP": "King's Park",
+    "KSC": "Kau Sai Chau",
+    "KTG": "Kwun Tong",
+    "LFS": "Lau Fau Shan",
+    "NGP": "Ngong Ping",
+    "PEN": "Peng Chau",
+    "PLC": "Tai Mei Tuk",
+    "SE1": "Kai Tak Runway Park",
+    "SEK": "Shek Kong",
+    "SHA": "Sha Tin",
+    "SKG": "Sai Kung",
+    "SKW": "Shau Kei Wan",
+    "SSH": "Sheung Shui",
+    "SSP": "Sham Shui Po",
+    "STY": "Stanley",
+    "TC": "Tate's Cairn",
+    "TKL": "Ta Kwu Ling",
+    "TMS": "Tai Mo Shan",
+    "TPO": "Tai Po (Conservation Studies Centre)",
+    "TU1": "Tuen Mun Children and Juvenile Home",
+    "TW": "Tsuen Wan Shing Mun Valley",
+    "TWN": "Tsuen Wan",
+    "TY1": "New Tsing Yi Station",
+    "TYW": "Pak Tam Chung (Tsak Yue Wu)",
+    "VP1": "The Peak",
+    "WGL": "Waglan Island",
+    "WLP": "Wetland Park",
+    "WTS": "Wong Tai Sin",
+    "YCT": "Tai Po (Yuan Chau Tsai Park)",
+    "YLP": "Yuen Long Park",
+}
+
+HKO_RYES_STATIONS: Dict[str, str] = {
+    "CCH": "Cheung Chau",
+    "CLK": "Chek Lap Kok",
+    "EPC": "Ping Chau",
+    "HKO": "Hong Kong Observatory",
+    "HKP": "Hong Kong Park",
+    "HKS": "Wong Chuk Hang",
+    "HPV": "Happy Valley",
+    "JKB": "Tseung Kwan O",
+    "KAT": "Kat O",
+    "KLT": "Kowloon City",
+    "KP": "King's Park",
+    "KTG": "Kwun Tong",
+    "LFS": "Lau Fau Shan",
+    "PLC": "Tai Mei Tuk",
+    "SE1": "Kai Tak Runway Park",
+    "SEK": "Shek Kong",
+    "SHA": "Sha Tin",
+    "SKG": "Sai Kung",
+    "SKW": "Shau Kei Wan",
+    "SSP": "Sham Shui Po",
+    "STK": "Sha Tau Kok",
+    "STY": "Stanley",
+    "SWH": "Sai Wan Ho",
+    "TAP": "Tap Mun",
+    "TBT": "Tsim Bei Tsui",
+    "TKL": "Ta Kwu Ling",
+    "TUN": "Tuen Mun",
+    "TW": "Tsuen Wan Shing Mun Valley",
+    "TWN": "Tsuen Wan Ho Koon",
+    "TY1": "Tsing Yi",
+    "WTS": "Wong Tai Sin",
+    "YCT": "Tai Po",
+    "YLP": "Yuen Long Park",
+    "YNF": "Yuen Ng Fan",
+}
+
+HKO_TIDE_STATION_MAP = HKO_TIDE_STATIONS
+HKO_CLIMATE_STATION_MAP = HKO_CLIMATE_STATIONS
+HKO_RYES_STATION_MAP = HKO_RYES_STATIONS
+
 
 # ============================================================
 # Small helpers (module-level; NOT exposed as tools)
@@ -303,6 +404,52 @@ def _meta(self) -> dict:
         "db_md5": getattr(self, "_db_md5", None),
         "ts": int(_now_s()),
     }
+
+
+async def _request(
+    self,
+    url: str,
+    params: Optional[dict] = None,
+    *,
+    method: Literal["GET", "POST"] = "GET",
+    json_body: Optional[dict] = None,
+    expect: Literal["json", "text"] = "json",
+    cache_ttl_s: Optional[int] = None,
+    cache_scope: Literal["mem", "disk", "none"] = "none",
+) -> Any:
+    return await self.http.request(
+        url,
+        params=params,
+        method=method,
+        json_body=json_body,
+        expect=expect,
+        cache_ttl_s=cache_ttl_s,
+        cache_scope=cache_scope,
+    )
+
+
+async def _download_json(self, url: str) -> Optional[dict]:
+    return await self.http.get_json(url)
+
+
+async def _download_text(self, url: str) -> Optional[str]:
+    return await self.http.get_text(url)
+
+
+async def _hko_get(self, endpoint: str, params: dict) -> Any:
+    return await self.hko._get(endpoint, params)
+
+
+async def _hko_get_text(self, endpoint: str, params: dict) -> Any:
+    return await self.hko._get_text(endpoint, params)
+
+
+async def _landsd_location_search(self, q: str, limit: int = 10) -> List[dict]:
+    return await self.landsd.location_search(q, limit)
+
+
+async def _landsd_transform_hk1980_to_wgs84(self, x: float, y: float) -> Optional[dict]:
+    return await self.landsd.transform_hk1980_to_wgs84(x, y)
 
 
 # ============================================================
