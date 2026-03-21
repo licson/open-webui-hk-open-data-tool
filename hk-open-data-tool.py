@@ -797,7 +797,939 @@ class Valves(BaseModel):
 
 
 # ============================================================
-# hkbus DB loading (daily JSON) - module-level helpers for TransitDB
+# TransitDB: Transit database loading, indexing, and ETA fetching
+# ============================================================
+class TransitDB:
+    GTFS_AGENCY_MAP = {
+        "nwff": "sunferry",
+        "hkkf": "hkkf",
+        "craw": "fortuneferry",
+        "star": "starferry",
+        "pi": "parkisland",
+        "pdbb": "dbferry",
+        "coralsea": "coralsea",
+        "tks": "tsuiwahferry",
+        "chuenkee": "chuenkee",
+    }
+
+    def __init__(self, http: HTTPClient, valves: "Valves"):
+        self.http = http
+        self.valves = valves
+        self._db_lock = asyncio.Lock()
+        self._db_loaded = False
+        self._db_source: Optional[str] = None
+        self._db_md5: Optional[str] = None
+        self._stop_list: Dict[str, dict] = {}
+        self._route_list: Dict[str, dict] = {}
+        self._stop_to_routes: Dict[str, List[StopOcc]] = {}
+        self._route_company_stops: Dict[Tuple[str, str], List[str]] = {}
+        self._route_company_stop_index: Dict[Tuple[str, str], Dict[str, int]] = {}
+        self._stop_degree: Dict[str, int] = {}
+        self._grid: Dict[Tuple[int, int], List[str]] = {}
+        self._grid_cell: float = 0.004
+        self._transfer_edges: Dict[str, List[Tuple[str, float]]] = {}
+
+    def meta(self) -> dict:
+        return {
+            "cached_db": self._db_loaded,
+            "db_source": self._db_source,
+            "db_md5": self._db_md5,
+        }
+
+    async def ensure_loaded(self) -> None:
+        if self._db_loaded:
+            return
+        async with self._db_lock:
+            if self._db_loaded:
+                return
+            db, source, md5 = await self._load_hkbus_db()
+            if not db:
+                raise RuntimeError("Failed to load hkbus DB.")
+            self._stop_list = db.get("stopList") or {}
+            self._route_list = db.get("routeList") or {}
+            await self.load_and_merge_gtfs_ferries()
+            db["stopList"] = self._stop_list
+            db["routeList"] = self._route_list
+            self._build_indices(db)
+            self._db_loaded = True
+            self._db_source = source
+            self._db_md5 = md5
+
+    async def _load_hkbus_db(self) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
+        cache_dir = Path(self.valves.cache_dir)
+        _safe_mkdir(cache_dir)
+        db_path = cache_dir / HKBUS_DB_JSON
+        md5_path = cache_dir / HKBUS_DB_MD5
+
+        if db_path.exists() and md5_path.exists():
+            try:
+                if (_now_s() - db_path.stat().st_mtime) <= self.valves.cache_ttl_s:
+                    j = json.loads(db_path.read_text(encoding="utf-8"))
+                    md5 = md5_path.read_text(encoding="utf-8").strip()
+                    return j, "disk", md5
+            except Exception:
+                pass
+
+        async def try_source(base: str) -> Tuple[Optional[dict], Optional[str]]:
+            md5 = await self.http.get_text(f"{base}/{HKBUS_DB_MD5}")
+            if not md5:
+                return None, None
+            db = await self.http.get_json(f"{base}/{HKBUS_DB_JSON}")
+            if not db:
+                return None, None
+            return db, md5.strip()
+
+        db, md5 = await try_source(self.valves.hkbus_primary_base)
+        source = self.valves.hkbus_primary_base
+        if not db:
+            db, md5 = await try_source(self.valves.hkbus_fallback_base)
+            source = self.valves.hkbus_fallback_base
+
+        if db and md5:
+            try:
+                db_path.write_text(json.dumps(db, ensure_ascii=False), encoding="utf-8")
+                md5_path.write_text(md5, encoding="utf-8")
+            except Exception:
+                pass
+            return db, source, md5
+
+        if db_path.exists():
+            try:
+                j = json.loads(db_path.read_text(encoding="utf-8"))
+                md5 = md5_path.read_text(encoding="utf-8").strip() if md5_path.exists() else None
+                return j, "disk_stale", md5
+            except Exception:
+                pass
+
+        return None, None, None
+
+    def _build_indices(self, db: dict) -> None:
+        self._stop_list = db.get("stopList") or {}
+        self._route_list = db.get("routeList") or {}
+
+        if not isinstance(self._stop_list, dict):
+            self._stop_list = {}
+        if not isinstance(self._route_list, dict):
+            self._route_list = {}
+
+        stop_to_routes: Dict[str, List[StopOcc]] = {}
+        route_company_stops: Dict[Tuple[str, str], List[str]] = {}
+        route_company_stop_index: Dict[Tuple[str, str], Dict[str, int]] = {}
+
+        for rid, r in self._route_list.items():
+            if not isinstance(r, dict):
+                continue
+            stops = r.get("stops")
+            if not isinstance(stops, dict):
+                continue
+            for co_raw, seq in stops.items():
+                if not isinstance(seq, list):
+                    continue
+                co = _norm_co(co_raw)
+                key = (rid, co)
+                route_company_stops[key] = [str(x) for x in seq if isinstance(x, str)]
+                idx = {}
+                for i, sid in enumerate(route_company_stops[key]):
+                    idx[sid] = i
+                    stop_to_routes.setdefault(sid, []).append(StopOcc(route_id=rid, company=co, seq=i))
+                route_company_stop_index[key] = idx
+
+        stop_degree: Dict[str, int] = {}
+        for sid, occs in stop_to_routes.items():
+            stop_degree[sid] = len({(o.company, o.route_id) for o in occs})
+
+        self._stop_to_routes = stop_to_routes
+        self._route_company_stops = route_company_stops
+        self._route_company_stop_index = route_company_stop_index
+        self._stop_degree = stop_degree
+
+        grid: Dict[Tuple[int, int], List[str]] = {}
+        cell_size = 0.004
+        for sid, s in self._stop_list.items():
+            if not isinstance(s, dict):
+                continue
+            loc = s.get("location") or {}
+            lat = _coerce_float(loc.get("lat"))
+            lon = _coerce_float(loc.get("lng"))
+            if lat is None or lon is None:
+                continue
+            gx = int(float(lat) / cell_size)
+            gy = int(float(lon) / cell_size)
+            grid.setdefault((gx, gy), []).append(str(sid))
+
+        self._grid = grid
+        self._grid_cell = cell_size
+
+        transfer_edges: Dict[str, List[Tuple[str, float]]] = {}
+        for sid, s in self._stop_list.items():
+            loc = s.get("location") or {}
+            lat = _coerce_float(loc.get("lat"))
+            lon = _coerce_float(loc.get("lng"))
+            if lat is None or lon is None:
+                continue
+
+            near = []
+            gx = int(float(lat) / cell_size)
+            gy = int(float(lon) / cell_size)
+            steps = 2
+            for dx in range(-steps, steps + 1):
+                for dy in range(-steps, steps + 1):
+                    for sid2 in grid.get((gx + dx, gy + dy), []):
+                        if sid == sid2:
+                            continue
+                        s2 = self._stop_list.get(sid2, {})
+                        loc2 = s2.get("location") or {}
+                        lat2 = _coerce_float(loc2.get("lat"))
+                        lon2 = _coerce_float(loc2.get("lng"))
+                        if lat2 is None or lon2 is None:
+                            continue
+                        dist = _haversine_m(float(lat), float(lon), float(lat2), float(lon2))
+                        if dist <= 800.0:
+                            near.append((sid2, dist))
+
+            near.sort(key=lambda x: x[1])
+            transfer_edges[sid] = near[:30]
+
+        self._transfer_edges = transfer_edges
+
+    async def load_and_merge_gtfs_ferries(self) -> None:
+        cache_path = Path(self.valves.cache_dir) / "hk_gtfs_ferries_cache_v9.json"
+
+        if cache_path.exists() and (_now_s() - cache_path.stat().st_mtime) < 86400:
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    ferry_data = json.load(f)
+                    self._inject_ferry_data_to_memory(ferry_data)
+                    return
+            except Exception:
+                pass
+
+        gtfs_urls = {
+            "en": "https://static.data.gov.hk/td/pt-headway-en/gtfs.zip",
+            "tc": "https://static.data.gov.hk/td/pt-headway-tc/gtfs.zip",
+        }
+
+        responses = {}
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            for lang, url in gtfs_urls.items():
+                response = await client.get(url, timeout=30.0)
+                response.raise_for_status()
+                responses[lang] = response.content
+
+        ferry_data = {"stops": {}, "routes": {}, "route_stops": {}}
+
+        def normalize_route_name(name: str) -> str:
+            n = str(name).lower()
+            n = re.sub(r"[\s\-\–\—\(\)]", "", n)
+            n = n.replace("to", "").replace("ordinaryferry", "").replace("fastferry", "")
+            return n
+
+        existing_ferry_fingerprints = set()
+        for r_key, r_info in self._route_list.items():
+            if not isinstance(r_info, dict):
+                continue
+            co_list = r_info.get("co", [])
+            if not co_list:
+                continue
+            co = _norm_co(co_list[0])
+            if _mode_of_company(co) == "ferry" or co in self.GTFS_AGENCY_MAP.values():
+                route_name = str(r_info.get("route", ""))
+                norm_name = normalize_route_name(route_name)
+                existing_ferry_fingerprints.add((co, norm_name))
+
+        def read_csv(z, filename):
+            with z.open(filename) as f:
+                content = f.read().decode("utf-8-sig").splitlines()
+                return list(csv.DictReader(content))
+
+        z_en = zipfile.ZipFile(io.BytesIO(responses["en"]))
+        z_tc = zipfile.ZipFile(io.BytesIO(responses["tc"]))
+
+        routes_en_raw = read_csv(z_en, "routes.txt")
+        routes_tc_raw = read_csv(z_tc, "routes.txt")
+        routes_tc = {r["route_id"]: r for r in routes_tc_raw}
+
+        ferry_routes = {}
+
+        for r in routes_en_raw:
+            rt_type = str(r.get("route_type", "")).strip()
+            if rt_type not in ("4", "1000", "1200"):
+                continue
+            raw_agency = r.get("agency_id", "").lower()
+            mapped_co = self.GTFS_AGENCY_MAP.get(raw_agency, raw_agency)
+            raw_name = r.get("route_short_name") or r.get("route_long_name") or "Ferry"
+            norm_name = normalize_route_name(raw_name)
+
+            is_duplicate = False
+            for existing_co, existing_norm_name in existing_ferry_fingerprints:
+                if mapped_co == existing_co and norm_name == existing_norm_name:
+                    is_duplicate = True
+                    break
+
+            if is_duplicate:
+                continue
+
+            ferry_routes[r["route_id"]] = {
+                "route_id": r["route_id"],
+                "agency": mapped_co,
+                "name": raw_name,
+            }
+
+        trips_en_raw = read_csv(z_en, "trips.txt")
+        trips_meta = {}
+        representative_trips = {}
+        seen_route_dirs = set()
+
+        for t in trips_en_raw:
+            r_id = t["route_id"]
+            if r_id in ferry_routes:
+                trips_meta[t["trip_id"]] = {
+                    "route_id": r_id,
+                    "direction_id": t.get("direction_id", "0"),
+                    "service_id": t.get("service_id", "1"),
+                }
+                dir_key = f"{r_id}_{t.get('direction_id', '0')}"
+                if dir_key not in seen_route_dirs:
+                    representative_trips[t["trip_id"]] = trips_meta[t["trip_id"]]
+                    seen_route_dirs.add(dir_key)
+
+        calendar_en_raw = read_csv(z_en, "calendar.txt")
+        service_bitmasks = {}
+        for c in calendar_en_raw:
+            mask = 0
+            if c.get("monday") == "1": mask |= 1
+            if c.get("tuesday") == "1": mask |= 2
+            if c.get("wednesday") == "1": mask |= 4
+            if c.get("thursday") == "1": mask |= 8
+            if c.get("friday") == "1": mask |= 16
+            if c.get("saturday") == "1": mask |= 32
+            if c.get("sunday") == "1": mask |= 64
+            service_bitmasks[c["service_id"]] = str(mask)
+
+        trip_frequencies = {}
+        try:
+            freq_en_raw = read_csv(z_en, "frequencies.txt")
+            for f in freq_en_raw:
+                t_id = f["trip_id"]
+                start_hhmm = f["start_time"][:5].replace(":", "")
+                end_hhmm = f["end_time"][:5].replace(":", "")
+                h_mins = max(1, int(f["headway_secs"]) // 60)
+                trip_frequencies.setdefault(t_id, []).append((start_hhmm, end_hhmm, h_mins))
+        except KeyError:
+            pass
+        except Exception:
+            pass
+
+        stop_times_en_raw = read_csv(z_en, "stop_times.txt")
+        trip_stops = {}
+        trip_first_depart = {}
+
+        for st in stop_times_en_raw:
+            t_id = st["trip_id"]
+            if t_id in trips_meta:
+                seq = int(st["stop_sequence"])
+                if t_id in representative_trips:
+                    trip_stops.setdefault(t_id, []).append((seq, st["stop_id"]))
+                if seq == 1 or t_id not in trip_first_depart:
+                    trip_first_depart[t_id] = st["departure_time"]
+
+        freq_data = {}
+        for t_id, meta in trips_meta.items():
+            r_id = meta["route_id"]
+            d_id = meta["direction_id"]
+            raw_s_id = meta["service_id"]
+            s_id = service_bitmasks.get(raw_s_id, raw_s_id)
+            dir_key = f"{r_id}_{d_id}"
+            if dir_key not in freq_data:
+                freq_data[dir_key] = {}
+            if s_id not in freq_data[dir_key]:
+                freq_data[dir_key][s_id] = {}
+
+            if t_id in trip_frequencies:
+                for start_hm, end_hm, h_mins in trip_frequencies[t_id]:
+                    freq_data[dir_key][s_id][start_hm] = [end_hm, h_mins]
+            else:
+                depart = trip_first_depart.get(t_id)
+                if depart:
+                    hhmm = depart[:5].replace(":", "")
+                    freq_data[dir_key][s_id][hhmm] = None
+
+        stops_en_raw = read_csv(z_en, "stops.txt")
+        stops_tc_raw = read_csv(z_tc, "stops.txt")
+        stops_en = {s["stop_id"]: s for s in stops_en_raw}
+        stops_tc = {s["stop_id"]: s for s in stops_tc_raw}
+
+        def resolve_route_code(agency: str, r_id: str, orig_en: str, dest_en: str, orig_tc: str, dest_tc: str) -> str:
+            if agency == "sunferry":
+                sunferry_pairs = [
+                    ("CECC", "Central", "Cheung Chau"),
+                    ("CEMW", "Central", "Mui Wo"),
+                    ("NPHH", "North Point", "Hung Hom"),
+                    ("NPKC", "North Point", "Kowloon City"),
+                    ("IIPECMUW", "Peng Chau", "Mui Wo"),
+                    ("IIMUWCMW", "Mui Wo", "Chi Ma Wan"),
+                    ("IICMWCHC", "Chi Ma Wan", "Cheung Chau"),
+                    ("IICHCMUW", "Cheung Chau", "Mui Wo"),
+                    ("IIMUWCHC", "Mui Wo", "Cheung Chau"),
+                ]
+                o_en_low, d_en_low = orig_en.lower(), dest_en.lower()
+                for code, mo, md in sunferry_pairs:
+                    if (mo.lower() in o_en_low and md.lower() in d_en_low) or (md.lower() in o_en_low and mo.lower() in d_en_low):
+                        return code
+            elif agency == "fortuneferry":
+                fortune_pairs = [
+                    ("7059", "中環", "紅磡"),
+                    ("7021", "北角", "啟德"),
+                    ("7056", "北角", "觀塘"),
+                    ("7025", "屯門", "大澳"),
+                    ("7000004", "東涌", "大澳"),
+                ]
+                for code, mo, md in fortune_pairs:
+                    if (mo in orig_tc and md in dest_tc) or (md in orig_tc and mo in dest_tc):
+                        return code
+            elif agency == "hkkf":
+                hkkf_pairs = [
+                    ("KF1", "Central", "Sok Kwu Wan"),
+                    ("KF2", "Central", "Yung Shue Wan"),
+                    ("KF3", "Central", "Peng Chau"),
+                    ("KF4", "Peng Chau", "Hei Ling Chau"),
+                ]
+                o_en_low, d_en_low = orig_en.lower(), dest_en.lower()
+                for code, mo, md in hkkf_pairs:
+                    if (mo.lower() in o_en_low and md.lower() in d_en_low) or (md.lower() in o_en_low and mo.lower() in d_en_low):
+                        return code
+            return r_id
+
+        ferry_pier_ids = set()
+        for t_id, stops in trip_stops.items():
+            trip_meta = representative_trips[t_id]
+            r_id = trip_meta["route_id"]
+            direction_id = trip_meta["direction_id"]
+            bound_letter = "I" if direction_id == "1" else "O"
+
+            stops.sort(key=lambda x: x[0])
+            stop_ids = [s[1] for s in stops]
+            ferry_pier_ids.update([s[1] for s in stops])
+
+            rt_info = ferry_routes[r_id]
+            orig_stop_id = stops[0][1]
+            dest_stop_id = stops[-1][1]
+
+            orig_en = stops_en.get(orig_stop_id, {}).get("stop_name", "Pier").strip()
+            dest_en = stops_en.get(dest_stop_id, {}).get("stop_name", "Pier").strip()
+            orig_tc = stops_tc.get(orig_stop_id, {}).get("stop_name", orig_en).strip()
+            dest_tc = stops_tc.get(dest_stop_id, {}).get("stop_name", dest_en).strip()
+
+            route_code = resolve_route_code(rt_info["agency"], r_id, orig_en, dest_en, orig_tc, dest_tc)
+            unified_route_id = f"{route_code}+1+{orig_en}+{dest_en}"
+            route_freq = freq_data.get(f"{r_id}_{direction_id}", {})
+
+            ferry_data["route_stops"][unified_route_id] = stop_ids
+            ferry_data["routes"][unified_route_id] = {
+                "gtfsId": r_id,
+                "route_id": unified_route_id,
+                "route": route_code,
+                "company": rt_info["agency"],
+                "co": [rt_info["agency"]],
+                "orig_tc": orig_tc,
+                "orig_en": orig_en,
+                "dest_tc": dest_tc,
+                "dest_en": dest_en,
+                "orig": {"en": orig_en, "zh": orig_tc},
+                "dest": {"en": dest_en, "zh": dest_tc},
+                "service_type": 1,
+                "serviceType": "1",
+                "bound": {rt_info["agency"]: bound_letter},
+                "stops": {rt_info["agency"]: stop_ids, bound_letter: stop_ids},
+                "freq": route_freq,
+            }
+
+        for sid in ferry_pier_ids:
+            s_en = stops_en.get(sid, {})
+            s_tc = stops_tc.get(sid, {})
+            ferry_data["stops"][sid] = {
+                "stop_id": sid,
+                "name": {"en": s_en.get("stop_name", ""), "zh": s_tc.get("stop_name", s_en.get("stop_name", ""))},
+                "lat": float(s_en.get("stop_lat", 0)),
+                "lng": float(s_en.get("stop_lon", 0)),
+            }
+
+        try:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(ferry_data, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+        self._inject_ferry_data_to_memory(ferry_data)
+
+    def _inject_ferry_data_to_memory(self, ferry_data: dict) -> None:
+        for stop_id, stop_info in ferry_data["stops"].items():
+            self._stop_list[stop_id] = {
+                "stop": str(stop_id),
+                "name": stop_info["name"],
+                "location": {"lat": stop_info["lat"], "lng": stop_info["lng"]},
+            }
+            lat = float(stop_info["lat"])
+            lon = float(stop_info["lng"])
+            gx = int(lat / self._grid_cell)
+            gy = int(lon / self._grid_cell)
+            self._grid.setdefault((gx, gy), []).append(str(stop_id))
+
+        for unified_route_id, stop_ids in ferry_data["route_stops"].items():
+            route_meta = ferry_data["routes"][unified_route_id]
+            company = route_meta["company"]
+            COMPANY_MODE[company] = "ferry"
+
+            self._route_list[unified_route_id] = {
+                "gtfsId": route_meta.get("gtfsId"),
+                "route": route_meta["route"],
+                "co": [str(company)],
+                "orig_tc": route_meta["orig_tc"],
+                "orig_en": route_meta["orig_en"],
+                "dest_tc": route_meta["dest_tc"],
+                "dest_en": route_meta["dest_en"],
+                "orig": route_meta["orig"],
+                "dest": route_meta["dest"],
+                "service_type": route_meta["service_type"],
+                "serviceType": route_meta["serviceType"],
+                "bound": route_meta["bound"],
+                "stops": route_meta["stops"],
+                "freq": route_meta["freq"],
+            }
+
+            self._route_company_stops[(unified_route_id, company)] = stop_ids
+            self._route_company_stop_index[(unified_route_id, company)] = {sid: idx for idx, sid in enumerate(stop_ids)}
+
+            for seq, sid in enumerate(stop_ids):
+                occ = StopOcc(route_id=unified_route_id, company=company, seq=seq)
+                if sid not in self._stop_to_routes:
+                    self._stop_to_routes[sid] = []
+                    self._stop_degree[sid] = 0
+                self._stop_to_routes[sid].append(occ)
+                self._stop_degree[sid] += 1
+
+    def stop_lite(self, stop_id: str) -> Optional[dict]:
+        s = self._stop_list.get(stop_id)
+        if not isinstance(s, dict):
+            return None
+        loc = s.get("location") or {}
+        lat = _coerce_float(loc.get("lat"))
+        lon = _coerce_float(loc.get("lng"))
+        name = s.get("name") or {}
+        name_en = str(name.get("en", "") or "")
+        name_zh = str(name.get("zh", "") or "")
+        return {
+            "stop_id": stop_id,
+            "name": {"en": name_en, "zh": name_zh},
+            "location": {"lat": lat, "lng": lon},
+            "display": name_en if name_en else (name_zh if name_zh else stop_id),
+        }
+
+    def route_lite(self, route_id: str) -> Optional[dict]:
+        r = self._route_list.get(route_id)
+        if not isinstance(r, dict):
+            return None
+        return {
+            "route_id": route_id,
+            "route": str(r.get("route", "") or ""),
+            "serviceType": r.get("serviceType"),
+            "co": [str(x) for x in (r.get("co") or []) if isinstance(x, str)],
+            "bound": r.get("bound") if isinstance(r.get("bound"), dict) else {},
+            "orig": r.get("orig") if isinstance(r.get("orig"), dict) else {},
+            "dest": r.get("dest") if isinstance(r.get("dest"), dict) else {},
+        }
+
+    def stop_distance_to_point(self, stop_id: str, lat2: float, lon2: float) -> Optional[float]:
+        s = self._stop_list.get(stop_id)
+        if not isinstance(s, dict):
+            return None
+        loc = s.get("location") or {}
+        lat1 = _coerce_float(loc.get("lat"))
+        lon1 = _coerce_float(loc.get("lng"))
+        if lat1 is None or lon1 is None:
+            return None
+        return _haversine_m(float(lat1), float(lon1), float(lat2), float(lon2))
+
+    def nearby_stop_ids(self, lat: float, lon: float, radius_m: float, limit: int = 30) -> List[Tuple[str, float]]:
+        cell = self._grid_cell
+        gx = int(lat / cell)
+        gy = int(lon / cell)
+        steps = max(1, int((radius_m / 111000.0) / cell) + 1)
+        cand = []
+        for dx in range(-steps, steps + 1):
+            for dy in range(-steps, steps + 1):
+                for sid in self._grid.get((gx + dx, gy + dy), []):
+                    d = self.stop_distance_to_point(sid, lat, lon)
+                    if d is None:
+                        continue
+                    if d <= radius_m:
+                        cand.append((sid, d))
+        cand.sort(key=lambda x: x[1])
+        return cand[:limit]
+
+    async def fetch_kmb_etas(self, stop_id: str, route: str, bound: str, seq: int, service_type: str) -> List[dict]:
+        async def _fetch(st: str) -> List[dict]:
+            url = f"{KMB_ETA_BASE}/eta/{stop_id}/{route}/{st}"
+            j = await self.http.request(url, expect="json", cache_scope="mem", cache_ttl_s=self.valves.eta_cache_ttl_s)
+            if not isinstance(j, dict) or j.get("error"):
+                return []
+            data = j.get("data") or []
+            return data if isinstance(data, list) else []
+
+        data = await _fetch("1")
+        st_obs = None
+        if isinstance(service_type, str) and service_type.strip().isdigit():
+            st_obs = service_type.strip()
+        if (not data) and st_obs and st_obs != "1":
+            data = await _fetch(st_obs)
+
+        if not data:
+            return []
+        out = []
+        for e in data:
+            if not isinstance(e, dict):
+                continue
+            if bound and str(e.get("dir", "")).strip() != bound:
+                continue
+            out.append(e)
+        out.sort(key=lambda x: x.get("eta") or "")
+        return out
+
+    async def fetch_ctb_etas(self, stop_id: str, route: str, bound: str, seq: int) -> List[dict]:
+        url = f"{CTB_ETA_BASE}/eta/CTB/{stop_id}/{route}"
+        j = await self.http.request(url, expect="json", cache_scope="mem", cache_ttl_s=self.valves.eta_cache_ttl_s)
+        if not isinstance(j, dict) or j.get("error"):
+            return []
+        data = j.get("data") or []
+        if not isinstance(data, list):
+            return []
+        out = []
+        for e in data:
+            if not isinstance(e, dict):
+                continue
+            if bound and str(e.get("dir", "")).strip() != bound:
+                continue
+            out.append(e)
+        out.sort(key=lambda x: x.get("eta") or "")
+        return out
+
+    async def fetch_gmb_etas(self, stop_id: str, gtfs_id: str, bound: str, seq: int) -> List[dict]:
+        url = f"{GMB_ETA_BASE}/eta/stop/{stop_id}/{gtfs_id}"
+        j = await self.http.request(url, expect="json", cache_scope="mem", cache_ttl_s=self.valves.eta_cache_ttl_s)
+        if not isinstance(j, dict) or j.get("error"):
+            return []
+        data = j.get("data") or []
+        if not isinstance(data, list):
+            return []
+        out = []
+        for e in data:
+            if not isinstance(e, dict):
+                continue
+            out.append(e)
+        out.sort(key=lambda x: x.get("eta") or "")
+        return out
+
+    async def fetch_mtr_next_trains(self, line: str, sta: str, lang: str = "en") -> List[dict]:
+        if not line or not sta:
+            return []
+        lang0 = (lang or "en").lower()
+        lang_param = "tc" if lang0 in ("tc", "zh", "sc") else "en"
+        params = {"line": line, "sta": sta, "lang": lang_param}
+        j = await self.http.request(MTR_TRAIN_BASE, params=params, expect="json", cache_ttl_s=self.valves.eta_cache_ttl_s, cache_scope="mem")
+        if not isinstance(j, dict):
+            return []
+
+        status = j.get("status")
+        if status == 0:
+            return [{"direction": None, "dest": None, "platform": None, "minutes": None, "iso": None, "message": j.get("message") or "", "url": j.get("url"), "raw": j}]
+
+        data = j.get("data")
+        if not isinstance(data, dict):
+            return []
+
+        key = f"{line}-{sta}"
+        payload = data.get(key)
+        if not isinstance(payload, dict):
+            return []
+
+        out: List[dict] = []
+        for d in ("UP", "DOWN"):
+            arr = payload.get(d)
+            if not isinstance(arr, list):
+                continue
+            for t in arr:
+                if not isinstance(t, dict):
+                    continue
+                if str(t.get("valid", "Y")).upper() != "Y":
+                    continue
+                mins = None
+                try:
+                    if str(t.get("ttnt", "")).strip().isdigit():
+                        mins = int(str(t.get("ttnt")).strip())
+                except Exception:
+                    mins = None
+                dt = _parse_hk_dt(str(t.get("time", "") or ""))
+                iso = dt.isoformat() if dt else None
+                out.append({"direction": d, "dest": t.get("dest"), "platform": t.get("plat"), "minutes": mins, "iso": iso, "seq": t.get("seq"), "source": t.get("source")})
+        out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"]), str(x.get("direction") or "")))
+        return out
+
+    async def fetch_lrt_next_trains(self, station_id: int) -> List[dict]:
+        if station_id <= 0:
+            return []
+        j = await self.http.request(MTR_LRT_BASE, params={"station_id": station_id}, expect="json", cache_ttl_s=self.valves.eta_cache_ttl_s, cache_scope="mem")
+        if not isinstance(j, dict):
+            return []
+        out: List[dict] = []
+        pls = j.get("platform_list")
+        if not isinstance(pls, list):
+            return out
+        for p in pls:
+            if not isinstance(p, dict):
+                continue
+            pid = p.get("platform_id")
+            routes = p.get("route_list")
+            if not isinstance(routes, list):
+                continue
+            for r in routes:
+                if not isinstance(r, dict):
+                    continue
+                time_en = str(r.get("time_en", "") or "")
+                mins = _minutes_from_compact_text(time_en)
+                out.append({"platform": pid, "route_no": r.get("route_no"), "dest_en": r.get("dest_en"), "dest_zh": r.get("dest_ch"), "minutes": mins, "text": time_en or None, "train_length": r.get("train_length"), "arrival_departure": r.get("arrival_departure")})
+        out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"]), str(x.get("route_no") or "")))
+        return out
+
+    async def fetch_mtr_bus_next_buses(self, route_name: str, stop_id: str, lang: str = "en") -> List[dict]:
+        if not route_name or not stop_id:
+            return []
+        lang0 = (lang or "en").lower()
+        api_lang = "zh" if lang0 in ("tc", "zh", "sc") else "en"
+        body = {"language": api_lang, "routeName": route_name}
+        j = await self.http.request(MTR_BUS_BASE, method="POST", json_body=body, expect="json", cache_ttl_s=self.valves.eta_cache_ttl_s, cache_scope="mem")
+        if not isinstance(j, dict):
+            return []
+        stops = j.get("busStop")
+        if not isinstance(stops, list):
+            return []
+        target = None
+        for s in stops:
+            if isinstance(s, dict) and str(s.get("busStopId", "")).strip() == stop_id:
+                target = s
+                break
+        if not isinstance(target, dict):
+            return []
+
+        out: List[dict] = []
+        buses = target.get("bus")
+        if not isinstance(buses, list):
+            return out
+        for b in buses:
+            if not isinstance(b, dict):
+                continue
+            sec = None
+            try:
+                if str(b.get("departureTimeInSecond", "")).strip().isdigit():
+                    sec = int(str(b.get("departureTimeInSecond")).strip())
+            except Exception:
+                sec = None
+            mins = None
+            if sec is not None:
+                mins = max(0, int(round(sec / 60.0)))
+            out.append({"minutes": mins, "text": b.get("departureTimeText") or b.get("arrivalTimeText") or None, "is_delayed": b.get("isDelayed"), "is_scheduled": b.get("isScheduled"), "remark": b.get("busRemark"), "lineRef": b.get("lineRef"), "busId": b.get("busId")})
+        out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
+        return out
+
+    async def fetch_sunferry_next_trip(self, route_code: str, lang: str = "en") -> List[dict]:
+        if not route_code:
+            return []
+        params = {"route": route_code}
+        j = await self.http.request(f"{SUNFERRY_BASE}/eta/", params=params, expect="json", cache_ttl_s=30, cache_scope="mem")
+        if not isinstance(j, dict):
+            return []
+        data = j.get("data")
+        if not isinstance(data, list):
+            return []
+        ts = j.get("generated_timestamp") or (data[0].get("date_timestamp") if data and isinstance(data[0], dict) else None)
+        now_dt = _parse_iso(str(ts or "")) or datetime.now(HK_TZ)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=HK_TZ)
+        now_hk = now_dt.astimezone(HK_TZ)
+
+        lang0 = (lang or "en").lower()
+        out = []
+        for r in data:
+            if not isinstance(r, dict):
+                continue
+            eta_hhmm = str(r.get("eta", "") or "")
+            mins = _eta_minutes_from_hhmm(now_hk, eta_hhmm)
+            rmk = r.get("rmk_en") if lang0 == "en" else r.get("rmk_tc") if lang0 in ("tc", "zh") else r.get("rmk_sc")
+            out.append({"minutes": mins, "iso": None, "eta_hhmm": eta_hhmm or None, "depart_hhmm": r.get("depart_time"), "route_en": r.get("route_en"), "route_tc": r.get("route_tc"), "remark": rmk, "vesselcode": r.get("vesselcode")})
+        out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
+        return out
+
+    async def fetch_fortuneferry_next_trip(self, route_code: str, lang: str = "en") -> List[dict]:
+        if not route_code:
+            return []
+        params = {"route": route_code}
+        j = await self.http.request(f"{FORTUNEFERRY_BASE}/eta/", params=params, expect="json", cache_ttl_s=30, cache_scope="mem")
+        if not isinstance(j, dict):
+            return []
+        data = j.get("data")
+        if not isinstance(data, list):
+            return []
+        ts = j.get("generated_timestamp") or (data[0].get("date_timestamp") if data and isinstance(data[0], dict) else None)
+        now_dt = _parse_iso(str(ts or "")) or datetime.now(HK_TZ)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=HK_TZ)
+        now_hk = now_dt.astimezone(HK_TZ)
+
+        lang0 = (lang or "en").lower()
+        out = []
+        for r in data:
+            if not isinstance(r, dict):
+                continue
+            eta_hhmm = str(r.get("eta", "") or "")
+            mins = _eta_minutes_from_hhmm(now_hk, eta_hhmm)
+            rmk = r.get("rmk_en") if lang0 == "en" else r.get("rmk_tc") if lang0 in ("tc", "zh") else r.get("rmk_sc")
+            out.append({"minutes": mins, "iso": None, "eta_hhmm": eta_hhmm or None, "depart_hhmm": r.get("depart_time"), "route_en": r.get("route_en"), "route_tc": r.get("route_tc"), "remark": rmk, "vesselcode": r.get("vesselcode")})
+        out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
+        return out
+
+    async def fetch_hkkf_next_trip(self, route_id: str, direction: str) -> List[dict]:
+        rid = None
+        try:
+            if str(route_id).strip().isdigit():
+                rid = int(str(route_id).strip())
+        except Exception:
+            rid = None
+        if rid is None:
+            return []
+        dir0 = (direction or "outbound").strip().lower()
+        if dir0 not in ("inbound", "outbound"):
+            dir0 = "outbound"
+
+        url = f"{HKKF_BASE}/opendata/eta/{rid}/{dir0}"
+        j = await self.http.request(url, expect="json", cache_ttl_s=30, cache_scope="mem")
+        if not isinstance(j, dict):
+            return []
+        data = j.get("data")
+        if not isinstance(data, list):
+            return []
+        out = []
+        for r in data:
+            if not isinstance(r, dict):
+                continue
+            iso = r.get("ETA")
+            mins = _eta_minutes(str(iso)) if iso else None
+            out.append({"minutes": mins, "iso": iso, "route_id": r.get("route_id"), "direction": r.get("direction"), "session_time": r.get("session_time"), "date": r.get("date")})
+        out.sort(key=lambda x: (10**9 if x.get("minutes") is None else int(x["minutes"])))
+        return out
+
+    async def leg_next_departures(self, company: str, route_id: str, board_stop_id: str, board_seq: int, limit_etas: int = 2, lang: str = "en") -> List[dict]:
+        r = self._route_list.get(route_id, {})
+        if not isinstance(r, dict):
+            return []
+
+        co = _norm_co(company)
+        route_no = str(r.get("route", "") or "")
+        bounds = r.get("bound", {}) if isinstance(r.get("bound"), dict) else {}
+        bound = str(bounds.get(co, bounds.get(co.lower(), "")) or "")
+
+        out: List[dict] = []
+
+        if co == "kmb":
+            observed_st = str(r.get("serviceType", "") or "").strip()
+            arr = await self.fetch_kmb_etas(board_stop_id, route_no, bound, board_seq, observed_st)
+            for e in arr[:limit_etas]:
+                eta_iso = e.get("eta")
+                mins = _eta_minutes(eta_iso)
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "kmb", "mode": _mode_of_company("kmb"), "direction": bound or None, "service_type_used": 1, "eta": {"iso": eta_iso, "minutes": mins, "text": (f"{mins} min" if mins is not None else None)}, "remark": {"en": e.get("rmk_en") or "", "zh": e.get("rmk_tc") or ""}})
+            return out
+
+        if co == "ctb":
+            arr = await self.fetch_ctb_etas(board_stop_id, route_no, bound, board_seq)
+            for e in arr[:limit_etas]:
+                eta_iso = e.get("eta")
+                mins = _eta_minutes(eta_iso)
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "ctb", "mode": _mode_of_company("ctb"), "direction": e.get("dir") or bound or None, "service_type_used": 1, "eta": {"iso": eta_iso, "minutes": mins, "text": (f"{mins} min" if mins is not None else None)}, "remark": {"en": e.get("rmk_en") or "", "zh": e.get("rmk_tc") or ""}})
+            return out
+
+        if co == "gmb":
+            gtfs_id = str(r.get("gtfsId", "") or "").strip()
+            if not gtfs_id:
+                return []
+            arr = await self.fetch_gmb_etas(board_stop_id, gtfs_id, bound, board_seq)
+            for e in arr[:limit_etas]:
+                eta_iso = e.get("eta") or None
+                mins = _eta_minutes(eta_iso) if eta_iso else None
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "gmb", "mode": _mode_of_company("gmb"), "direction": bound or None, "service_type_used": 1, "eta": {"iso": eta_iso, "minutes": mins, "text": (f"{mins} min" if mins is not None else None)}, "remark": {"en": e.get("rmk_en") or "", "zh": e.get("rmk_tc") or ""}})
+            return out
+
+        if co == "mtr":
+            trains = await self.fetch_mtr_next_trains(route_no, board_stop_id, lang=lang)
+            for t in trains[:limit_etas]:
+                mins = t.get("minutes")
+                iso = t.get("iso")
+                dest = t.get("dest")
+                plat = t.get("platform")
+                msg = t.get("message") or ""
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "mtr", "mode": _mode_of_company("mtr"), "direction": t.get("direction"), "service_type_used": 1, "eta": {"iso": iso, "minutes": mins, "text": (f"{mins} min" if isinstance(mins, int) else None)}, "platform": plat, "dest": dest, "remark": {"en": msg, "zh": msg}, "url": t.get("url")})
+            return out
+
+        if co == "lightrail":
+            station_id = None
+            try:
+                if str(board_stop_id).strip().isdigit():
+                    station_id = int(str(board_stop_id).strip())
+            except Exception:
+                station_id = None
+            if station_id is None:
+                return []
+            trains = await self.fetch_lrt_next_trains(station_id)
+            filtered = [x for x in trains if str(x.get("route_no") or "") == route_no] or trains
+            for t in filtered[:limit_etas]:
+                mins = t.get("minutes")
+                text = t.get("text")
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "lightrail", "mode": _mode_of_company("lightrail"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": text}, "platform": t.get("platform"), "dest": t.get("dest_en"), "remark": {"en": "", "zh": ""}})
+            return out
+
+        if co == "lrtfeeder":
+            buses = await self.fetch_mtr_bus_next_buses(route_no, board_stop_id, lang=lang)
+            for b in buses[:limit_etas]:
+                mins = b.get("minutes")
+                txt = b.get("text")
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "lrtfeeder", "mode": _mode_of_company("lrtfeeder"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": txt}, "remark": {"en": str(b.get("remark") or ""), "zh": str(b.get("remark") or "")}})
+            return out
+
+        if co == "sunferry":
+            trips = await self.fetch_sunferry_next_trip(route_no, lang=lang)
+            for t in trips[:limit_etas]:
+                mins = t.get("minutes")
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "sunferry", "mode": _mode_of_company("sunferry"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": (t.get("eta_hhmm") or None)}, "remark": {"en": str(t.get("remark") or ""), "zh": str(t.get("remark") or "")}})
+            return out
+
+        if co == "fortuneferry":
+            trips = await self.fetch_fortuneferry_next_trip(route_no, lang=lang)
+            for t in trips[:limit_etas]:
+                mins = t.get("minutes")
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "fortuneferry", "mode": _mode_of_company("fortuneferry"), "direction": None, "service_type_used": 1, "eta": {"iso": None, "minutes": mins, "text": (t.get("eta_hhmm") or None)}, "remark": {"en": str(t.get("remark") or ""), "zh": str(t.get("remark") or "")}})
+            return out
+
+        if co == "hkkf":
+            direction = bound.strip().lower() if bound else "outbound"
+            trips = await self.fetch_hkkf_next_trip(route_no, direction=direction)
+            for t in trips[:limit_etas]:
+                mins = t.get("minutes")
+                iso = t.get("iso")
+                out.append({"stop_id": board_stop_id, "route_id": route_id, "route": route_no, "company": "hkkf", "mode": _mode_of_company("hkkf"), "direction": t.get("direction") or direction, "service_type_used": 1, "eta": {"iso": iso, "minutes": mins, "text": (f"{mins} min" if isinstance(mins, int) else None)}, "remark": {"en": "", "zh": ""}})
+            return out
+
+        return out
+
+
+# ============================================================
+# hkbus DB loading (daily JSON) - module-level helpers (DEPRECATED: use TransitDB)
 # ============================================================
 
 
@@ -2259,7 +3191,6 @@ class Tools:
         self._db_source = None
         self._db_md5 = None
 
-        # hkbus caches
         self._stop_list: Dict[str, dict] = {}
         self._route_list: Dict[str, dict] = {}
         self._stop_to_routes: Dict[str, List[StopOcc]] = {}
@@ -2268,8 +3199,14 @@ class Tools:
         self._stop_degree: Dict[str, int] = {}
         self._grid: Dict[Tuple[int, int], List[str]] = {}
         self._grid_cell: float = 0.004
+        self._transfer_edges: Dict[str, List[Tuple[str, float]]] = {}
 
         self._client: Optional[httpx.AsyncClient] = None
+
+        self.http = HTTPClient(self.valves, self.valves.cache_dir)
+        self.hko = HKOClient(self.http)
+        self.landsd = LandsDClient(self.http)
+        self.transit = TransitDB(self.http, self.valves)
 
     # =========================
     # HKO: Weather / Open Data API
