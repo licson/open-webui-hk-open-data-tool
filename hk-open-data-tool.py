@@ -2,7 +2,7 @@
 title: Hong Kong Open Data
 author: Licson Lee
 author_url: https://licson.net/
-git_url:
+git_url: https://github.com/licson/open-webui-hk-open-data-tool
 description: LLM-safe HK open-data tool (HKO, LandsD, TD). Transit supports bus/minibus + MTR (rail/LRT/MTR bus) + ferries; curated trip planning; no dump endpoints.
 required_open_webui_version: 0.5.0
 requirements: httpx,pydantic
