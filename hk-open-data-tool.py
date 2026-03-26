@@ -1811,6 +1811,8 @@ class TripPlanner:
         d_pt = get_pt(d_loc)
 
         if not o_pt or not d_pt:
+            if __event_emitter__:
+                await __event_emitter__({"type": "status", "data": {"description": "Could not resolve locations.", "done": True}})
             return {"error": "location_not_found", "detail": "Could not resolve WGS84 coordinates for origin/destination."}
 
         def get_knn_stops(pt, k=25, max_radius=800):
@@ -3628,12 +3630,13 @@ class Tools:
                 ),
             }
 
-        items = await asyncio.gather(*[one_stop(s) for s in stops])
-
-        if __event_emitter__:
-            await __event_emitter__(
-                {"type": "status", "data": {"description": "Done.", "done": True}}
-            )
+        try:
+            items = await asyncio.gather(*[one_stop(s) for s in stops])
+        finally:
+            if __event_emitter__:
+                await __event_emitter__(
+                    {"type": "status", "data": {"description": "Done.", "done": True}}
+                )
 
         return {
             "meta": self.meta(source="hko"),
