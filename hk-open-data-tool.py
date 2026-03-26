@@ -521,7 +521,24 @@ class LandsDClient:
             return []
         if not isinstance(j, list):
             return []
-        return [x for x in j if isinstance(x, dict)][:limit]
+        rows = [x for x in j if isinstance(x, dict)][:limit]
+        out = []
+        for r in rows:
+            x = coerce_float(r.get("x"))
+            y = coerce_float(r.get("y"))
+            wgs = None
+            if x is not None and y is not None:
+                wgs = await self.transform_hk1980_to_wgs84(float(x), float(y))
+            out.append(
+                {
+                    "name": {"en": r.get("nameEN"), "zh": r.get("nameZH")},
+                    "address": {"en": r.get("addressEN"), "zh": r.get("addressZH")},
+                    "district": {"en": r.get("districtEN"), "zh": r.get("districtZH")},
+                    "hk1980": {"x": x, "y": y},
+                    "wgs84": wgs,
+                }
+            )
+        return out
 
     async def transform_hk1980_to_wgs84(self, x: float, y: float) -> Optional[dict]:
         j = await self.http.request(
@@ -3134,24 +3151,8 @@ class Tools:
         Example:
           {"query":"Ap Lei Chau","limit":5}
         """
-        rows = await self.landsd.location_search(query, limit=limit)
-        out = []
-        for r in rows:
-            x = coerce_float(r.get("x"))
-            y = coerce_float(r.get("y"))
-            wgs = None
-            if x is not None and y is not None:
-                wgs = await self.landsd.transform_hk1980_to_wgs84(float(x), float(y))
-            out.append(
-                {
-                    "name": {"en": r.get("nameEN"), "zh": r.get("nameZH")},
-                    "address": {"en": r.get("addressEN"), "zh": r.get("addressZH")},
-                    "district": {"en": r.get("districtEN"), "zh": r.get("districtZH")},
-                    "hk1980": {"x": x, "y": y},
-                    "wgs84": wgs,
-                }
-            )
-        return {"meta": self.meta(source="hko"), "query": query, "items": out}
+        items = await self.landsd.location_search(query, limit=limit)
+        return {"meta": self.meta(source="hko"), "query": query, "items": items}
 
     # =========================
     # TD: hkbus catalog + ETAs + planning
