@@ -1800,7 +1800,13 @@ class TripPlanner:
         d_loc = await self.landsd.location_search(destination_place, limit=1)
 
         def get_pt(loc_resp) -> Optional[Tuple[float, float]]:
-            items = loc_resp.get("items", []) if isinstance(loc_resp, dict) else []
+            # Handle both dict with "items" key and list directly (from location_search)
+            if isinstance(loc_resp, dict):
+                items = loc_resp.get("items", [])
+            elif isinstance(loc_resp, list):
+                items = loc_resp
+            else:
+                items = []
             if not items:
                 return None
             w = items[0].get("wgs84") or {}
@@ -3549,7 +3555,7 @@ class Tools:
             if len(departures) >= limit_routes:
                 break
 
-        return {"meta": self.meta(source="hko"), "stop": stop, "departures": departures}
+        return {"meta": self.meta(source="td"), "stop": stop, "departures": departures}
 
     async def td_departures_nearby(
         self,
