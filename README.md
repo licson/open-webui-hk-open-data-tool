@@ -18,6 +18,7 @@ An [Open WebUI](https://github.com/open-webui/open-webui) tool providing LLM-saf
 ### Lands Department (LandsD)
 - Location search (place names, addresses, landmarks)
 - Coordinate transformation (HK1980 grid to WGS84)
+- **Search nearby places** from WGS84 coordinates (finds features within 1km radius, sorted by distance)
 
 ### Transport / Transit (TD)
 - Comprehensive transit database: buses, minibuses, MTR, Light Rail, ferries
@@ -52,6 +53,8 @@ This tool is designed for natural conversation. Simply ask questions about Hong 
 - "Plan a route from Tsim Sha Tsui to Mong Kok"
 - "What time is sunset today?"
 - "Find the coordinates for Victoria Peak"
+- "What facilities are near Wong Shek Pier?"
+- "Show me places near these coordinates: 22.37, 114.31"
 
 ## Credits
 
