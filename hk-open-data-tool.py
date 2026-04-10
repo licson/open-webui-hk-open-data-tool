@@ -359,6 +359,13 @@ def eta_minutes_from_hhmm(now_hk: datetime, hhmm: str) -> Optional[int]:
     return max(0, int(round(diff / 60.0)))
 
 
+def strip_html(html: str) -> str:
+    """Remove HTML tags from a string."""
+    if not html or not isinstance(html, str):
+        return ""
+    return re.sub(r'<[^>]+>', '', html)
+
+
 def cursor_make(qkey: str, offset: int) -> str:
     return f"{qkey}:{offset}"
 
@@ -568,6 +575,68 @@ class LandsDClient:
             return None
 
         return {"lat": float(lat), "lon": float(lon)}
+
+    async def transform_wgs84_to_hk1980(self, lat: float, lon: float) -> Optional[dict]:
+        """Transform WGS84 coordinates to HK1980 grid coordinates."""
+        j = await self.http.request(
+            self.TRANSFORM_BASE,
+            params={"inSys": "wgsgeog", "outSys": "hkgrid", "lat": float(lat), "long": float(lon)},
+            method="GET",
+            expect="json",
+            cache_scope="mem",
+            cache_ttl_s=30 * 24 * 3600,
+        )
+        if not isinstance(j, dict) or j.get("error"):
+            return None
+
+        x = coerce_float(j.get("hkE"))
+        y = coerce_float(j.get("hkN"))
+        if x is None or y is None:
+            return None
+
+        return {"x": float(x), "y": float(y)}
+
+    async def search_nearby(self, x: float, y: float, lang: str = "en") -> List[dict]:
+        """
+        Search for nearby places given HK1980 coordinates.
+        Returns results sorted by distance (nearest first).
+        Searches within a 1km radius from the specified coordinates.
+        """
+        url = f"{self.LOCATION_BASE}/{self.LOCATION_VERSION}/searchNearby"
+        params = {"x": x, "y": y, "lang": lang}
+        j = await self.http.request(url, params=params, expect="json", cache_scope="mem", cache_ttl_s=3600)
+        if isinstance(j, dict) and j.get("error"):
+            return []
+        if not isinstance(j, list):
+            return []
+
+        out = []
+        for r in j:
+            if not isinstance(r, dict):
+                continue
+            item_x = coerce_float(r.get("x"))
+            item_y = coerce_float(r.get("y"))
+            wgs = None
+            if item_x is not None and item_y is not None:
+                wgs = await self.transform_hk1980_to_wgs84(float(item_x), float(item_y))
+
+            # Build additional info dict from keys/values, stripping HTML
+            additional_info = {}
+            keys = r.get("additionalInfoKey", []) or []
+            values = r.get("additionalInfoValue", []) or []
+            for k, v in zip(keys, values):
+                if isinstance(v, str):
+                    v = strip_html(v)
+                additional_info[k] = v
+
+            out.append({
+                "name": r.get("name"),
+                "address": r.get("address"),
+                "hk1980": {"x": item_x, "y": item_y},
+                "wgs84": wgs,
+                "additional_info": additional_info,
+            })
+        return out
 
 
 # ============================================================
@@ -3161,6 +3230,57 @@ class Tools:
         """
         items = await self.landsd.location_search(query, limit=limit)
         return {"meta": self.meta(source="hko"), "query": query, "items": items}
+
+    async def landsd_search_nearby(
+        self,
+        lat: float,
+        lon: float,
+        lang: Literal["en", "tc", "sc"] = "en",
+        limit: int = 20,
+    ) -> dict:
+        """
+        Lands Department - Search Nearby Places API.
+        Returns places near the specified WGS84 coordinates.
+
+        Official endpoint:
+          - GET https://www.map.gov.hk/gs/api/v1.0.0/searchNearby
+
+        Important notes:
+          - Results are sorted by distance (the first result is the nearest feature)
+          - Searches within a 1km radius from the specified coordinates
+
+        Required:
+          - lat: WGS84 latitude
+          - lon: WGS84 longitude
+
+        Optional:
+          - lang: language ("en", "tc", "sc"), default "en"
+          - limit: max results to return (default 20, max 50)
+
+        Example - Search near Wong Shek Pier:
+          {"lat": 22.370055, "lon": 114.305205, "lang": "en", "limit": 10}
+        """
+        # Convert WGS84 to HK1980 first
+        hk1980 = await self.landsd.transform_wgs84_to_hk1980(lat, lon)
+        if not hk1980:
+            return {
+                "meta": self.meta(source="landsd"),
+                "error": "Coordinate transformation failed",
+                "query": {"lat": lat, "lon": lon, "lang": lang},
+                "items": [],
+            }
+
+        items = await self.landsd.search_nearby(hk1980["x"], hk1980["y"], lang=lang)
+        # Apply limit client-side since API doesn't support it
+        items = items[:max(1, min(limit, 50))]
+
+        return {
+            "meta": self.meta(source="landsd"),
+            "query": {"lat": lat, "lon": lon, "lang": lang},
+            "transformed_hk1980": hk1980,
+            "count": len(items),
+            "items": items,
+        }
 
     # =========================
     # TD: hkbus catalog + ETAs + planning
