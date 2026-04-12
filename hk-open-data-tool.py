@@ -838,6 +838,194 @@ class EPDClient:
 
 
 # ============================================================
+# HA Client
+# ============================================================
+class HAClient:
+    """Hospital Authority - Accident and Emergency Waiting Time API Client."""
+
+    BASE_URL_EN = "https://www.ha.org.hk/opendata/aed/aedwtdata2-en.json"
+    BASE_URL_TC = "https://www.ha.org.hk/opendata/aed/aedwtdata2-tc.json"
+    BASE_URL_SC = "https://www.ha.org.hk/opendata/aed/aedwtdata2-sc.json"
+
+    # Hospital name normalization for fuzzy matching
+    HOSPITAL_ALIASES: Dict[str, str] = {
+        # Alice Ho Miu Ling Nethersole Hospital
+        "alice ho": "Alice Ho Miu Ling Nethersole Hospital",
+        "alice ho miu ling nethersole hospital": "Alice Ho Miu Ling Nethersole Hospital",
+        "nethersole": "Alice Ho Miu Ling Nethersole Hospital",
+        "大埔那打素": "Alice Ho Miu Ling Nethersole Hospital",
+        "雅麗氏何妙齡那打素醫院": "Alice Ho Miu Ling Nethersole Hospital",
+        "那打素": "Alice Ho Miu Ling Nethersole Hospital",
+        # Caritas Medical Centre
+        "caritas": "Caritas Medical Centre",
+        "caritas medical centre": "Caritas Medical Centre",
+        "明愛": "Caritas Medical Centre",
+        "明愛醫院": "Caritas Medical Centre",
+        # Kwong Wah Hospital
+        "kwong wah": "Kwong Wah Hospital",
+        "kwong wah hospital": "Kwong Wah Hospital",
+        "廣華": "Kwong Wah Hospital",
+        "廣華醫院": "Kwong Wah Hospital",
+        # North District Hospital
+        "north district": "North District Hospital",
+        "north district hospital": "North District Hospital",
+        "北區": "North District Hospital",
+        "北區醫院": "North District Hospital",
+        # North Lantau Hospital
+        "north lantau": "North Lantau Hospital",
+        "north lantau hospital": "North Lantau Hospital",
+        "北大嶼山": "North Lantau Hospital",
+        "北大嶼山醫院": "North Lantau Hospital",
+        # Pamela Youde Nethersole Eastern Hospital
+        "pamela youde": "Pamela Youde Nethersole Eastern Hospital",
+        "pamela youde nethersole eastern hospital": "Pamela Youde Nethersole Eastern Hospital",
+        "pym": "Pamela Youde Nethersole Eastern Hospital",
+        "東區": "Pamela Youde Nethersole Eastern Hospital",
+        "東區醫院": "Pamela Youde Nethersole Eastern Hospital",
+        "東區尤德夫人那打素醫院": "Pamela Youde Nethersole Eastern Hospital",
+        "pamela youde nethersole": "Pamela Youde Nethersole Eastern Hospital",
+        # Pok Oi Hospital
+        "pok oi": "Pok Oi Hospital",
+        "pok oi hospital": "Pok Oi Hospital",
+        "博愛": "Pok Oi Hospital",
+        "博愛醫院": "Pok Oi Hospital",
+        # Prince of Wales Hospital
+        "prince of wales": "Prince of Wales Hospital",
+        "prince of wales hospital": "Prince of Wales Hospital",
+        "pow": "Prince of Wales Hospital",
+        "威爾斯": "Prince of Wales Hospital",
+        "威爾斯親王醫院": "Prince of Wales Hospital",
+        # Princess Margaret Hospital
+        "princess margaret": "Princess Margaret Hospital",
+        "princess margaret hospital": "Princess Margaret Hospital",
+        "pmh": "Princess Margaret Hospital",
+        "瑪嘉烈": "Princess Margaret Hospital",
+        "瑪嘉烈醫院": "Princess Margaret Hospital",
+        # Queen Elizabeth Hospital
+        "queen elizabeth": "Queen Elizabeth Hospital",
+        "queen elizabeth hospital": "Queen Elizabeth Hospital",
+        "qeh": "Queen Elizabeth Hospital",
+        "伊利沙伯": "Queen Elizabeth Hospital",
+        "伊利沙伯醫院": "Queen Elizabeth Hospital",
+        "伊院": "Queen Elizabeth Hospital",
+        # Queen Mary Hospital
+        "queen mary": "Queen Mary Hospital",
+        "queen mary hospital": "Queen Mary Hospital",
+        "qmh": "Queen Mary Hospital",
+        "瑪麗": "Queen Mary Hospital",
+        "瑪麗醫院": "Queen Mary Hospital",
+        # Ruttonjee Hospital
+        "ruttonjee": "Ruttonjee Hospital",
+        "ruttonjee hospital": "Ruttonjee Hospital",
+        "律敦治": "Ruttonjee Hospital",
+        "律敦治醫院": "Ruttonjee Hospital",
+        # St John Hospital
+        "st john": "St John Hospital",
+        "st john hospital": "St John Hospital",
+        "saint john": "St John Hospital",
+        "saint john hospital": "St John Hospital",
+        "聖約翰": "St John Hospital",
+        "聖約翰醫院": "St John Hospital",
+        # Tin Shui Wai Hospital
+        "tin shui wai": "Tin Shui Wai Hospital",
+        "tin shui wai hospital": "Tin Shui Wai Hospital",
+        "tsw": "Tin Shui Wai Hospital",
+        "天水圍": "Tin Shui Wai Hospital",
+        "天水圍醫院": "Tin Shui Wai Hospital",
+        # Tseung Kwan O Hospital
+        "tseung kwan o": "Tseung Kwan O Hospital",
+        "tseung kwan o hospital": "Tseung Kwan O Hospital",
+        "tko": "Tseung Kwan O Hospital",
+        "將軍澳": "Tseung Kwan O Hospital",
+        "將軍澳醫院": "Tseung Kwan O Hospital",
+        # Tuen Mun Hospital
+        "tuen mun": "Tuen Mun Hospital",
+        "tuen mun hospital": "Tuen Mun Hospital",
+        "tmh": "Tuen Mun Hospital",
+        "屯門": "Tuen Mun Hospital",
+        "屯門醫院": "Tuen Mun Hospital",
+        # United Christian Hospital
+        "united christian": "United Christian Hospital",
+        "united christian hospital": "United Christian Hospital",
+        "uch": "United Christian Hospital",
+        "基督教聯合": "United Christian Hospital",
+        "基督教聯合醫院": "United Christian Hospital",
+        "聯合醫院": "United Christian Hospital",
+        # Yan Chai Hospital
+        "yan chai": "Yan Chai Hospital",
+        "yan chai hospital": "Yan Chai Hospital",
+        "仁濟": "Yan Chai Hospital",
+        "仁濟醫院": "Yan Chai Hospital",
+    }
+
+    TRIAGE_INFO: Dict[str, Dict[str, str]] = {
+        "t1": {
+            "en": "Critical",
+            "zh": "危殆",
+            "description_en": "Life-threatening conditions requiring immediate resuscitation",
+            "description_zh": "生命受威脅的情況，需立即進行搶救",
+        },
+        "t2": {
+            "en": "Emergency",
+            "zh": "危急",
+            "description_en": "Potential threat to life",
+            "description_zh": "有潛在生命危險",
+        },
+        "t3": {
+            "en": "Urgent",
+            "zh": "緊急",
+            "description_en": "Stable but distressing conditions",
+            "description_zh": "穩定但帶來不適的情況",
+        },
+        "t4": {
+            "en": "Semi-urgent",
+            "zh": "次緊急",
+            "description_en": "Stable with less distress",
+            "description_zh": "穩定及較少不適",
+        },
+        "t5": {
+            "en": "Non-urgent",
+            "zh": "非緊急",
+            "description_en": "Stable with minimal discomfort",
+            "description_zh": "穩定及輕微不適",
+        },
+    }
+
+    def __init__(self, http: HTTPClient):
+        self.http = http
+
+    def _normalize_hospital_name(self, name: str) -> Optional[str]:
+        """Normalize hospital name for fuzzy matching."""
+        if not name:
+            return None
+        normalized = normalize_text(name)
+        return self.HOSPITAL_ALIASES.get(normalized)
+
+    async def fetch_waiting_times(self, lang: str = "en") -> dict:
+        """Fetch A&E waiting times for all hospitals."""
+        if lang == "tc":
+            url = self.BASE_URL_TC
+        elif lang == "sc":
+            url = self.BASE_URL_SC
+        else:
+            url = self.BASE_URL_EN
+
+        data = await self.http.request(
+            url,
+            expect="json",
+            cache_scope="mem",
+            cache_ttl_s=300,  # 5 minutes
+        )
+        if isinstance(data, dict) and data.get("error"):
+            return {"waitTime": [], "updateTime": None}
+        return data if isinstance(data, dict) else {"waitTime": [], "updateTime": None}
+
+    def get_triage_info(self) -> dict:
+        """Return triage category explanations."""
+        return self.TRIAGE_INFO
+
+
+# ============================================================
 # HTTP Client
 # ============================================================
 class HTTPClient:
@@ -2404,6 +2592,7 @@ class Tools:
         self.epd = EPDClient(self.http)
         self.transit = TransitDB(self.http, self.valves)
         self.planner = TripPlanner(self.transit, self.landsd, self.valves)
+        self.ha = HAClient(self.http)
 
     def meta(self, source: Optional[str] = None) -> dict:
         base = {"tool": "Hong Kong Open Data", "version": "0.6.0", "ts": int(now_s())}
@@ -4262,3 +4451,164 @@ class Tools:
             result["forecasts"]["roadside"] = roadside_forecasts
 
         return result
+
+    # =========================
+    # HA: Hospital Authority - A&E Waiting Time
+    # =========================
+    async def ha_aed_waiting_time(
+        self,
+        hospital: Optional[str] = None,
+        triage_category: Optional[Literal["t1", "t2", "t3", "t4", "t5", "all"]] = "all",
+        lang: Literal["en", "tc", "sc"] = "en",
+    ) -> dict:
+        """
+        Hospital Authority (HA) - Accident and Emergency (A&E) Waiting Time.
+
+        Returns real-time queue statistics for A&E departments across all public
+        hospitals in Hong Kong. The data includes waiting times by triage category.
+
+        Triage Categories (5-tier system):
+        - T1 (Critical/危殆): Life-threatening, immediate resuscitation
+        - T2 (Emergency/危急): Potential threat to life
+        - T3 (Urgent/緊急): Stable but distressing conditions
+        - T4 (Semi-urgent/次緊急): Stable with less distress
+        - T5 (Non-urgent/非緊急): Stable with minimal discomfort
+
+        Parameters
+        ----------
+        hospital:
+            Optional filter by hospital name. Supports fuzzy matching.
+            Examples: "Queen Elizabeth", "Kwong Wah", "大埔那打素"
+
+        triage_category:
+            Filter by triage category:
+            - "t1": Only T1 (critical) waiting times
+            - "t2": Only T2 (emergency) waiting times
+            - "t3": Only T3 (urgent) waiting times
+            - "t4": T4 (semi-urgent) waiting times
+            - "t5": T5 (non-urgent) waiting times
+            - "all": All categories (default)
+
+        lang:
+            - "en" English
+            - "tc" Traditional Chinese
+            - "sc" Simplified Chinese
+
+        Examples
+        --------
+        Get all hospitals with all triage categories:
+            {}
+
+        Get specific hospital:
+            {"hospital": "Queen Elizabeth"}
+
+        Get only T3 (urgent) waiting times for all hospitals:
+            {"triage_category": "t3"}
+
+        Get data in Traditional Chinese:
+            {"lang": "tc"}
+        """
+        data = await self.ha.fetch_waiting_times(lang=lang)
+
+        wait_times = data.get("waitTime", [])
+        update_time = data.get("updateTime")
+
+        # Filter by hospital if specified
+        target_hospital = None
+        if hospital:
+            target_hospital = self.ha._normalize_hospital_name(hospital)
+
+        hospitals = []
+        for item in wait_times:
+            if not isinstance(item, dict):
+                continue
+
+            hosp_name = item.get("hospName", "")
+
+            # Filter by hospital name
+            if target_hospital:
+                if normalize_text(hosp_name) != normalize_text(target_hospital):
+                    continue
+
+            # Build waiting times based on triage_category filter
+            waiting_times = {}
+
+            if triage_category in ("t1", "all"):
+                waiting_times["t1"] = {
+                    "category": self.ha.TRIAGE_INFO["t1"],
+                    "waiting_time": item.get("t1wt"),
+                    "managing_cases": item.get("manageT1case") == "Y",
+                }
+
+            if triage_category in ("t2", "all"):
+                waiting_times["t2"] = {
+                    "category": self.ha.TRIAGE_INFO["t2"],
+                    "waiting_time": item.get("t2wt"),
+                    "managing_cases": item.get("manageT2case") == "Y",
+                }
+
+            if triage_category in ("t3", "all"):
+                waiting_times["t3"] = {
+                    "category": self.ha.TRIAGE_INFO["t3"],
+                    "median_wait": item.get("t3p50"),
+                    "percentile_95": item.get("t3p95"),
+                }
+
+            if triage_category in ("t4", "all"):
+                waiting_times["t4"] = {
+                    "category": self.ha.TRIAGE_INFO["t4"],
+                    "median_wait": item.get("t45p50"),
+                    "percentile_95": item.get("t45p95"),
+                }
+
+            if triage_category == "t5":
+                # T4 and T5 are combined in the API
+                waiting_times["t5"] = {
+                    "category": self.ha.TRIAGE_INFO["t5"],
+                    "median_wait": item.get("t45p50"),
+                    "percentile_95": item.get("t45p95"),
+                }
+
+            hospitals.append({"name": hosp_name, "waiting_times": waiting_times})
+
+        # Sort hospitals by T3 median wait time (longest first) for urgency indication
+        if triage_category in ("t3", "all"):
+            try:
+
+                def extract_minutes(wait_str):
+                    if not wait_str:
+                        return 0
+                    wait_str = str(wait_str).lower()
+                    # Extract number from strings like "33 minutes", "2.5 hours"
+                    import re
+
+                    match = re.search(r"(\d+\.?\d*)", wait_str)
+                    if not match:
+                        return 0
+                    val = float(match.group(1))
+                    if "hour" in wait_str:
+                        val *= 60
+                    return val
+
+                hospitals.sort(
+                    key=lambda x: extract_minutes(
+                        x["waiting_times"].get("t3", {}).get("median_wait", "")
+                    ),
+                    reverse=True,
+                )
+            except Exception:
+                pass
+
+        return {
+            "meta": {
+                **self.meta(source="ha"),
+                "triage_guide": self.ha.get_triage_info(),
+            },
+            "update_time": update_time,
+            "total_hospitals": len(hospitals),
+            "filters_applied": {
+                "hospital": hospital,
+                "triage_category": triage_category,
+            },
+            "hospitals": hospitals,
+        }

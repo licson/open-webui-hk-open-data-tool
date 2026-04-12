@@ -30,6 +30,20 @@ An [Open WebUI](https://github.com/open-webui/open-webui) tool providing LLM-saf
 - **AQHI forecast** for today (AM/PM predictions)
 - AQHI scale explanation (1-10+ with health advice)
 
+### Hospital Authority (HA)
+- **A&E Waiting Time** real-time queue statistics:
+  - All 18 public hospital A&E departments
+  - Triage category breakdown (T1-T5):
+    - T1 (Critical): Life-threatening conditions
+    - T2 (Emergency): Potential threat to life
+    - T3 (Urgent): Stable but distressing conditions
+    - T4 (Semi-urgent): Stable with less distress
+    - T5 (Non-urgent): Stable with minimal discomfort
+  - Median and 95th percentile wait times
+  - Hospital name fuzzy matching (supports English/Chinese aliases)
+  - Data sorted by urgency (longest waits first)
+- Bilingual support (English/Traditional Chinese/Simplified Chinese)
+
 ### Transport / Transit (TD)
 - Comprehensive transit database: buses, minibuses, MTR, Light Rail, ferries
 - Real-time ETA for all major operators (KMB, CTB, GMB, MTR, LRT, ferries)
@@ -68,6 +82,9 @@ This tool is designed for natural conversation. Simply ask questions about Hong 
 - "What's the air quality like today?"
 - "Is the air quality good in Causeway Bay?"
 - "Show me the air quality forecast for today"
+- "How long is the A&E wait at Queen Elizabeth Hospital?"
+- "Which hospital has the shortest A&E waiting time?"
+- "Show me A&E waiting times for urgent cases"
 
 ## Credits
 
@@ -76,6 +93,7 @@ This tool aggregates data from official Hong Kong government open data sources:
 - **[Hong Kong Observatory](https://www.hko.gov.hk)** - Weather, climate, and astronomical data
 - **[Lands Department](https://www.landsd.gov.hk)** - Geospatial and location services
 - **[Environment Protection Department](https://www.epd.gov.hk)** - Air Quality Health Index (AQHI) data
+- **[Hospital Authority](https://www.ha.org.hk)** - Accident and Emergency waiting time statistics
 - **[Transport Department](https://www.td.gov.hk)** - Public transport information
 
 Transit database powered by **[HKBus (HK Bus Crawling)](https://github.com/hkbus/hk-bus-crawling)** © 2021 - Comprehensive Hong Kong bus route and stop data.
