@@ -18,20 +18,20 @@ An [Open WebUI](https://github.com/open-webui/open-webui) tool providing LLM-saf
 ### Lands Department (LandsD)
 - Location search (place names, addresses, landmarks)
 - Coordinate transformation (HK1980 grid to WGS84)
-- **Search nearby places** from WGS84 coordinates (finds features within 1km radius, sorted by distance)
+- Search nearby places from WGS84 coordinates (finds features within 1km radius, sorted by distance)
 
 ### Environment Protection Department (EPD)
-- **Air Quality Health Index (AQHI)** current readings:
+- Air Quality Health Index (AQHI) current readings:
   - City-wide summary (general and roadside)
   - Individual monitoring stations (18 stations across Hong Kong)
   - Bilingual station names (English/Chinese)
   - Health risk level translations
   - Station-specific filtering support
-- **AQHI forecast** for today (AM/PM predictions)
+- AQHI forecast for today (AM/PM predictions)
 - AQHI scale explanation (1-10+ with health advice)
 
 ### Hospital Authority (HA)
-- **A&E Waiting Time** real-time queue statistics:
+- A&E Waiting Time real-time queue statistics:
   - All 18 public hospital A&E departments
   - Triage category breakdown (T1-T5):
     - T1 (Critical): Life-threatening conditions
@@ -45,14 +45,14 @@ An [Open WebUI](https://github.com/open-webui/open-webui) tool providing LLM-saf
 - Bilingual support (English/Traditional Chinese/Simplified Chinese)
 
 ### Digital Policy Office (DPO)
-- **Address Lookup Service (ALS)**:
+- Address Lookup Service (ALS):
   - Standardized Hong Kong address search with fuzzy matching
   - Returns structured address components (English/Chinese)
-  - **GeoAddress** - 19-character standardized unique identifier for each address
-  - **Coordinates** - Both HK1980 grid and WGS84 latitude/longitude
+  - GeoAddress - 19-character standardized unique identifier for each address
+  - Coordinates - Both HK1980 grid and WGS84 latitude/longitude
   - Address validation and similar spelling matching
   - 3D address support (floor/unit) for Housing Authority properties
-- **GeoAddress Lookup**:
+- GeoAddress Lookup:
   - Retrieve address details from GeoAddress identifier
   - Cross-reference addresses between systems
 

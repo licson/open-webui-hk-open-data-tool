@@ -1055,7 +1055,7 @@ class ALSClient:
 
             formatted = f"{region}{district}{street_name}"
             if street_no:
-                formatted += f" {street_no}號"
+                formatted += f" {street_no} 號"
             formatted += building
             return formatted
         else:
