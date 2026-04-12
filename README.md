@@ -20,6 +20,16 @@ An [Open WebUI](https://github.com/open-webui/open-webui) tool providing LLM-saf
 - Coordinate transformation (HK1980 grid to WGS84)
 - **Search nearby places** from WGS84 coordinates (finds features within 1km radius, sorted by distance)
 
+### Environment Protection Department (EPD)
+- **Air Quality Health Index (AQHI)** current readings:
+  - City-wide summary (general and roadside)
+  - Individual monitoring stations (18 stations across Hong Kong)
+  - Bilingual station names (English/Chinese)
+  - Health risk level translations
+  - Station-specific filtering support
+- **AQHI forecast** for today (AM/PM predictions)
+- AQHI scale explanation (1-10+ with health advice)
+
 ### Transport / Transit (TD)
 - Comprehensive transit database: buses, minibuses, MTR, Light Rail, ferries
 - Real-time ETA for all major operators (KMB, CTB, GMB, MTR, LRT, ferries)
@@ -55,13 +65,17 @@ This tool is designed for natural conversation. Simply ask questions about Hong 
 - "Find the coordinates for Victoria Peak"
 - "What facilities are near Wong Shek Pier?"
 - "Show me places near these coordinates: 22.37, 114.31"
+- "What's the air quality like today?"
+- "Is the air quality good in Causeway Bay?"
+- "Show me the air quality forecast for today"
 
 ## Credits
 
 This tool aggregates data from official Hong Kong government open data sources:
 
-- **[Hong Kong Observatory](https://www.hkgov.hk)** - Weather, climate, and astronomical data
+- **[Hong Kong Observatory](https://www.hko.gov.hk)** - Weather, climate, and astronomical data
 - **[Lands Department](https://www.landsd.gov.hk)** - Geospatial and location services
+- **[Environment Protection Department](https://www.epd.gov.hk)** - Air Quality Health Index (AQHI) data
 - **[Transport Department](https://www.td.gov.hk)** - Public transport information
 
 Transit database powered by **[HKBus (HK Bus Crawling)](https://github.com/hkbus/hk-bus-crawling)** © 2021 - Comprehensive Hong Kong bus route and stop data.

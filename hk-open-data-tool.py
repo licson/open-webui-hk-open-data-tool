@@ -99,6 +99,11 @@ SUNFERRY_BASE = "https://www.sunferry.com.hk"
 HKKF_BASE = "https://www.hkkfeta.com"
 FORTUNEFERRY_BASE = "https://www.hongkongwatertaxi.com.hk"
 
+# EPD Endpoints
+EPD_AQHI_CITY_DASHBOARD = "https://datagovhk.blob.core.windows.net/dataset/aqhi/aqhi.json"
+EPD_AQHI_INDIVIDUAL = "https://dashboard.data.gov.hk/api/aqhi-individual"
+EPD_AQHI_FORECAST = "https://datagovhk.blob.core.windows.net/dataset/aqhi/aqhi-forecast.json"
+
 # Timezone
 HK_TZ = timezone(timedelta(hours=8))
 
@@ -202,6 +207,37 @@ HKO_RYES_STATIONS: Dict[str, str] = {
 HKO_TIDE_STATION_MAP = HKO_TIDE_STATIONS
 HKO_CLIMATE_STATION_MAP = HKO_CLIMATE_STATIONS
 HKO_RYES_STATION_MAP = HKO_RYES_STATIONS
+
+# EPD AQHI Station Mapping (bilingual)
+EPD_AQHI_STATIONS: Dict[str, Dict[str, str]] = {
+    "centralwestern": {"en": "Central/Western", "zh": "中西區"},
+    "southern": {"en": "Southern", "zh": "南區"},
+    "eastern": {"en": "Eastern", "zh": "東區"},
+    "kwuntong": {"en": "Kwun Tong", "zh": "觀塘"},
+    "shamshuipo": {"en": "Sham Shui Po", "zh": "深水埗"},
+    "kwaichung": {"en": "Kwai Chung", "zh": "葵涌"},
+    "tsuenwan": {"en": "Tsuen Wan", "zh": "荃灣"},
+    "tseungkwano": {"en": "Tseung Kwan O", "zh": "將軍澳"},
+    "yuenlong": {"en": "Yuen Long", "zh": "元朗"},
+    "tuenmun": {"en": "Tuen Mun", "zh": "屯門"},
+    "tungchung": {"en": "Tung Chung", "zh": "東涌"},
+    "taipo": {"en": "Tai Po", "zh": "大埔"},
+    "shatin": {"en": "Sha Tin", "zh": "沙田"},
+    "north": {"en": "North", "zh": "北區"},
+    "tapmun": {"en": "Tap Mun", "zh": "塔門"},
+    "causewaybay": {"en": "Causeway Bay", "zh": "銅鑼灣"},
+    "central": {"en": "Central", "zh": "中環"},
+    "mongkok": {"en": "Mong Kok", "zh": "旺角"},
+}
+
+# EPD AQHI Health Risk Translation
+EPD_AQHI_HEALTH_RISK: Dict[str, Dict[str, str]] = {
+    "Low": {"en": "Low", "zh": "低"},
+    "Moderate": {"en": "Moderate", "zh": "中"},
+    "High": {"en": "High", "zh": "高"},
+    "Very High": {"en": "Very High", "zh": "甚高"},
+    "Serious": {"en": "Serious", "zh": "嚴重"},
+}
 
 
 # ============================================================
@@ -637,6 +673,168 @@ class LandsDClient:
                 "additional_info": additional_info,
             })
         return out
+
+
+# ============================================================
+# EPD Client
+# ============================================================
+class EPDClient:
+    """Environment Protection Department - Air Quality Health Index (AQHI) API Client."""
+
+    CITY_DASHBOARD_URL = EPD_AQHI_CITY_DASHBOARD
+    INDIVIDUAL_URL = EPD_AQHI_INDIVIDUAL
+    FORECAST_URL = EPD_AQHI_FORECAST
+
+    # Station name normalization mapping for fuzzy matching
+    STATION_NAME_ALIASES: Dict[str, str] = {
+        "central western": "centralwestern",
+        "central/western": "centralwestern",
+        "中西區": "centralwestern",
+        "中西": "centralwestern",
+        "southern": "southern",
+        "南區": "southern",
+        "南": "southern",
+        "eastern": "eastern",
+        "東區": "eastern",
+        "東": "eastern",
+        "kwun tong": "kwuntong",
+        "觀塘": "kwuntong",
+        "sham shui po": "shamshuipo",
+        "深水埗": "shamshuipo",
+        "kwai chung": "kwaichung",
+        "葵涌": "kwaichung",
+        "tsuen wan": "tsuenwan",
+        "荃灣": "tsuenwan",
+        "tseung kwan o": "tseungkwano",
+        "將軍澳": "tseungkwano",
+        "yuen long": "yuenlong",
+        "元朗": "yuenlong",
+        "tuen mun": "tuenmun",
+        "屯門": "tuenmun",
+        "tung chung": "tungchung",
+        "東涌": "tungchung",
+        "tai po": "taipo",
+        "大埔": "taipo",
+        "sha tin": "shatin",
+        "沙田": "shatin",
+        "north": "north",
+        "北區": "north",
+        "北": "north",
+        "tap mun": "tapmun",
+        "塔門": "tapmun",
+        "causeway bay": "causewaybay",
+        "銅鑼灣": "causewaybay",
+        "central": "central",
+        "中環": "central",
+        "mong kok": "mongkok",
+        "旺角": "mongkok",
+    }
+
+    def __init__(self, http: HTTPClient):
+        self.http = http
+
+    def _normalize_station_name(self, name: str) -> Optional[str]:
+        """Normalize station name for fuzzy matching."""
+        if not name:
+            return None
+        normalized = normalize_text(name)
+        return self.STATION_NAME_ALIASES.get(normalized)
+
+    def _translate_health_risk(self, risk: str) -> Dict[str, str]:
+        """Translate health risk level to bilingual format."""
+        return EPD_AQHI_HEALTH_RISK.get(risk, {"en": risk, "zh": risk})
+
+    def _get_station_info(self, station_key: str) -> Dict[str, str]:
+        """Get bilingual station info."""
+        return EPD_AQHI_STATIONS.get(station_key, {"en": station_key, "zh": station_key})
+
+    async def fetch_city_dashboard(self) -> List[dict]:
+        """Fetch city-wide AQHI summary (general and roadside)."""
+        data = await self.http.request(
+            self.CITY_DASHBOARD_URL,
+            expect="json",
+            cache_scope="mem",
+            cache_ttl_s=300  # 5 minutes
+        )
+        if isinstance(data, dict) and data.get("error"):
+            return []
+        return data if isinstance(data, list) else []
+
+    async def fetch_individual_stations(self) -> List[dict]:
+        """Fetch individual station AQHI readings."""
+        data = await self.http.request(
+            self.INDIVIDUAL_URL,
+            params={"format": "json"},
+            expect="json",
+            cache_scope="mem",
+            cache_ttl_s=300  # 5 minutes
+        )
+        if isinstance(data, dict) and data.get("error"):
+            return []
+        return data if isinstance(data, list) else []
+
+    async def fetch_forecast(self) -> List[dict]:
+        """Fetch AQHI health risk forecast."""
+        data = await self.http.request(
+            self.FORECAST_URL,
+            expect="json",
+            cache_scope="mem",
+            cache_ttl_s=300  # 5 minutes
+        )
+        if isinstance(data, dict) and data.get("error"):
+            return []
+        return data if isinstance(data, list) else []
+
+    def get_scale_explanation(self) -> dict:
+        """Return AQHI scale explanation with bilingual support."""
+        return {
+            "description": {
+                "en": "The Air Quality Health Index (AQHI) is a scale from 1 to 10+ indicating the health risk level of air pollution.",
+                "zh": "空氣質素健康指數（AQHI）是一個由1至10+的指標，顯示空氣污染對健康構成的風險級別。"
+            },
+            "levels": [
+                {
+                    "range": "1-3",
+                    "risk": {"en": "Low", "zh": "低"},
+                    "advice": {
+                        "en": "Enjoy your usual outdoor activities.",
+                        "zh": "盡情享受戶外活動。"
+                    }
+                },
+                {
+                    "range": "4-6",
+                    "risk": {"en": "Moderate", "zh": "中"},
+                    "advice": {
+                        "en": "No need to modify your usual outdoor activities unless you experience symptoms.",
+                        "zh": "如無不適，可如常進行戶外活動。"
+                    }
+                },
+                {
+                    "range": "7",
+                    "risk": {"en": "High", "zh": "高"},
+                    "advice": {
+                        "en": "Reduce outdoor physical exertion, especially if you experience symptoms.",
+                        "zh": "如你出現不適，應減少體力消耗，特別是戶外活動。"
+                    }
+                },
+                {
+                    "range": "8-10",
+                    "risk": {"en": "Very High", "zh": "甚高"},
+                    "advice": {
+                        "en": "Reduce time spent outdoors, especially if you experience symptoms.",
+                        "zh": "如你出現不適，應減少戶外活動。"
+                    }
+                },
+                {
+                    "range": "10+",
+                    "risk": {"en": "Serious", "zh": "嚴重"},
+                    "advice": {
+                        "en": "Avoid outdoor activities.",
+                        "zh": "避免戶外活動。"
+                    }
+                }
+            ]
+        }
 
 
 # ============================================================
@@ -2203,6 +2401,7 @@ class Tools:
         self.http = HTTPClient(self.valves, self.valves.cache_dir)
         self.hko = HKOClient(self.http)
         self.landsd = LandsDClient(self.http)
+        self.epd = EPDClient(self.http)
         self.transit = TransitDB(self.http, self.valves)
         self.planner = TripPlanner(self.transit, self.landsd, self.valves)
 
@@ -3842,4 +4041,224 @@ class Tools:
         await self.transit.ensure_loaded()
         result = await self.planner.plan(origin_place, destination_place, limit, max_transfers, preferences, lang, __event_emitter__)
         result["meta"] = self.meta(source="td")
+        return result
+
+    # =========================
+    # EPD: Environment Protection Department - AQHI
+    # =========================
+    async def epd_aqhi_current(
+        self,
+        station: Optional[str] = None,
+        type_filter: Optional[Literal["general", "roadside"]] = None,
+    ) -> dict:
+        """
+        Environment Protection Department (EPD) - Current Air Quality Health Index (AQHI).
+
+        Returns current AQHI readings from both the city dashboard (general/roadside summaries)
+        and individual monitoring stations across Hong Kong.
+
+        The AQHI is a scale from 1 to 10+ indicating the health risk level of air pollution:
+        - 1-3: Low (低) - Enjoy your usual outdoor activities
+        - 4-6: Moderate (中) - No need to modify usual outdoor activities
+        - 7: High (高) - Reduce outdoor physical exertion
+        - 8-10: Very High (甚高) - Reduce time spent outdoors
+        - 10+: Serious (嚴重) - Avoid outdoor activities
+
+        Parameters
+        ----------
+        station:
+            Optional filter by station name. Supports fuzzy matching in English or Chinese.
+            Supported stations: Central/Western (中西區), Southern (南區), Eastern (東區),
+            Kwun Tong (觀塘), Sham Shui Po (深水埗), Kwai Chung (葵涌), Tsuen Wan (荃灣),
+            Tseung Kwan O (將軍澳), Yuen Long (元朗), Tuen Mun (屯門), Tung Chung (東涌),
+            Tai Po (大埔), Sha Tin (沙田), North (北區), Tap Mun (塔門),
+            Causeway Bay (銅鑼灣), Central (中環), Mong Kok (旺角).
+
+        type_filter:
+            Optional filter by type:
+            - "general": General AQHI readings
+            - "roadside": Roadside AQHI readings (traffic-related)
+
+        Examples
+        --------
+        Get all current readings:
+            {}
+
+        Get readings for Central/Western station:
+            {"station": "Central/Western"}
+
+        Get only roadside readings:
+            {"type_filter": "roadside"}
+        """
+        # Fetch data from both endpoints
+        city_data = await self.epd.fetch_city_dashboard()
+        station_data = await self.epd.fetch_individual_stations()
+
+        # Process city summary
+        city_summary = {}
+        for item in city_data:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type", "").lower()
+            if type_filter and item_type != type_filter.lower():
+                continue
+
+            # Determine health risk (use max if min/max differ)
+            health_risk = item.get("health_risk_max") or item.get("health_risk_min")
+            aqhi_min = item.get("aqhi_min")
+            aqhi_max = item.get("aqhi_max")
+
+            # Format AQHI range
+            if aqhi_min is not None and aqhi_max is not None:
+                if aqhi_min == aqhi_max:
+                    aqhi_range = str(aqhi_min)
+                else:
+                    aqhi_range = f"{aqhi_min}-{aqhi_max}"
+            elif aqhi_max is not None:
+                aqhi_range = str(aqhi_max)
+            elif aqhi_min is not None:
+                aqhi_range = str(aqhi_min)
+            else:
+                aqhi_range = None
+
+            city_summary[item_type] = {
+                "aqhi_range": aqhi_range,
+                "health_risk": self.epd._translate_health_risk(health_risk) if health_risk else None,
+                "publish_date": item.get("publish_date"),
+            }
+
+        # Process individual stations
+        stations = []
+        target_station_key = None
+        if station:
+            target_station_key = self.epd._normalize_station_name(station)
+
+        for item in station_data:
+            if not isinstance(item, dict):
+                continue
+
+            station_name_en = item.get("station", "")
+            station_key = normalize_text(station_name_en).replace(" ", "")
+
+            # Filter by station if specified
+            if target_station_key and station_key != target_station_key:
+                continue
+
+            # Filter by type if specified
+            if type_filter:
+                # Individual stations don't have type, but we can infer from station_id
+                # Roadside stations: Causeway Bay, Central, Mong Kok
+                roadside_stations = {"causewaybay", "central", "mongkok"}
+                is_roadside = station_key in roadside_stations
+                if type_filter.lower() == "roadside" and not is_roadside:
+                    continue
+                if type_filter.lower() == "general" and is_roadside:
+                    continue
+
+            # Get bilingual station name
+            station_info = self.epd._get_station_info(station_key)
+            health_risk = item.get("health_risk")
+
+            stations.append({
+                "name": station_info,
+                "aqhi": item.get("aqhi"),
+                "health_risk": self.epd._translate_health_risk(health_risk) if health_risk else None,
+                "publish_date": item.get("publish_date"),
+            })
+
+        # Sort stations by AQHI (descending, highest risk first)
+        stations.sort(key=lambda x: (x["aqhi"] if x["aqhi"] is not None else -1), reverse=True)
+
+        return {
+            "meta": {**self.meta(source="epd"), "scale": self.epd.get_scale_explanation()},
+            "scale_explanation": self.epd.get_scale_explanation(),
+            "city_summary": city_summary,
+            "stations": stations,
+            "total_stations": len(stations),
+            "filters_applied": {
+                "station": station,
+                "type": type_filter,
+            },
+        }
+
+    async def epd_aqhi_forecast(
+        self,
+        type_filter: Optional[Literal["general", "roadside"]] = None,
+    ) -> dict:
+        """
+        Environment Protection Department (EPD) - AQHI Health Risk Forecast.
+
+        Returns the predicted health risk levels for today (morning and afternoon).
+        The forecast helps you plan outdoor activities in advance.
+
+        Parameters
+        ----------
+        type_filter:
+            Optional filter by type:
+            - "general": General AQHI forecast
+            - "roadside": Roadside AQHI forecast (traffic-related)
+
+        Examples
+        --------
+        Get all forecasts:
+            {}
+
+        Get only general forecasts:
+            {"type_filter": "general"}
+        """
+        forecast_data = await self.epd.fetch_forecast()
+
+        # Group forecasts by type
+        general_forecasts = []
+        roadside_forecasts = []
+
+        for item in forecast_data:
+            if not isinstance(item, dict):
+                continue
+
+            item_type = item.get("type", "").lower()
+            if type_filter and item_type != type_filter.lower():
+                continue
+
+            health_risk_min = item.get("health_risk_min")
+            health_risk_max = item.get("health_risk_max")
+
+            # Determine health risk (use max if min/max differ)
+            if health_risk_min == health_risk_max:
+                health_risk = health_risk_min
+            else:
+                health_risk = f"{health_risk_min} to {health_risk_max}"
+
+            forecast_entry = {
+                "date": item.get("date"),
+                "time_period": item.get("time"),  # A.M. or P.M.
+                "health_risk_range": {
+                    "min": self.epd._translate_health_risk(health_risk_min) if health_risk_min else None,
+                    "max": self.epd._translate_health_risk(health_risk_max) if health_risk_max else None,
+                },
+                "health_risk_summary": self.epd._translate_health_risk(health_risk) if isinstance(health_risk, str) else {"en": health_risk, "zh": health_risk},
+                "publish_date": item.get("publish_date"),
+            }
+
+            if item_type == "general":
+                general_forecasts.append(forecast_entry)
+            elif item_type == "roadside":
+                roadside_forecasts.append(forecast_entry)
+
+        # Sort by time period (A.M. before P.M.)
+        for forecasts in [general_forecasts, roadside_forecasts]:
+            forecasts.sort(key=lambda x: 0 if x.get("time_period") == "A.M." else 1)
+
+        result = {
+            "meta": {**self.meta(source="epd"), "scale": self.epd.get_scale_explanation()},
+            "scale_explanation": self.epd.get_scale_explanation(),
+            "forecasts": {},
+        }
+
+        if general_forecasts and (not type_filter or type_filter.lower() == "general"):
+            result["forecasts"]["general"] = general_forecasts
+
+        if roadside_forecasts and (not type_filter or type_filter.lower() == "roadside"):
+            result["forecasts"]["roadside"] = roadside_forecasts
+
         return result
