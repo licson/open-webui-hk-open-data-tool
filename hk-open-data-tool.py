@@ -104,6 +104,9 @@ EPD_AQHI_CITY_DASHBOARD = "https://datagovhk.blob.core.windows.net/dataset/aqhi/
 EPD_AQHI_INDIVIDUAL = "https://dashboard.data.gov.hk/api/aqhi-individual"
 EPD_AQHI_FORECAST = "https://datagovhk.blob.core.windows.net/dataset/aqhi/aqhi-forecast.json"
 
+# DPO Endpoints
+DPO_ALS_BASE = "https://www.als.gov.hk/lookup"
+
 # Timezone
 HK_TZ = timezone(timedelta(hours=8))
 
@@ -1023,6 +1026,284 @@ class HAClient:
     def get_triage_info(self) -> dict:
         """Return triage category explanations."""
         return self.TRIAGE_INFO
+
+
+# ============================================================
+# DPO ALS Client
+# ============================================================
+class ALSClient:
+    """Digital Policy Office - Address Lookup Service (ALS) Client."""
+
+    def __init__(self, http: HTTPClient):
+        self.http = http
+
+    def _format_address(self, premises: dict, lang: str) -> str:
+        """Format address in culturally appropriate order."""
+        if lang in ("tc", "sc", "zh", "zh-hant"):
+            # Chinese format: RegionDistrictStreetName StreetNo號Building
+            region = premises.get("Region", "")
+            district = ""
+            street_name = ""
+            street_no = ""
+            building = premises.get("BuildingName", "")
+
+            if "ChiDistrict" in premises:
+                district = premises["ChiDistrict"].get("DcDistrict", "")
+            if "ChiStreet" in premises:
+                street_name = premises["ChiStreet"].get("StreetName", "")
+                street_no = premises["ChiStreet"].get("BuildingNoFrom", "")
+
+            formatted = f"{region}{district}{street_name}"
+            if street_no:
+                formatted += f" {street_no}號"
+            formatted += building
+            return formatted
+        else:
+            # English format: Building, StreetNo StreetName, District, Region
+            building = premises.get("BuildingName", "")
+            street_name = ""
+            street_no = ""
+            district = ""
+            region = premises.get("Region", "")
+
+            if "EngStreet" in premises:
+                street_name = premises["EngStreet"].get("StreetName", "")
+                street_no = premises["EngStreet"].get("BuildingNoFrom", "")
+            if "EngDistrict" in premises:
+                district = premises["EngDistrict"].get("DcDistrict", "")
+
+            parts = [building]
+            if street_no and street_name:
+                parts.append(f"{street_no} {street_name}")
+            elif street_name:
+                parts.append(street_name)
+            if district:
+                parts.append(district)
+            if region:
+                parts.append(region)
+            return ", ".join(parts)
+
+    def _parse_premises(self, premises: dict) -> dict:
+        """Parse premises address into structured format."""
+        result = {
+            "en": {},
+            "zh": {}
+        }
+
+        # English structured address
+        if "EngPremisesAddress" in premises:
+            eng = premises["EngPremisesAddress"]
+            result["en"] = {
+                "building_name": eng.get("BuildingName"),
+                "block": eng.get("BlockNo"),
+                "phase": eng.get("PhaseNo"),
+                "street": {
+                    "name": eng.get("EngStreet", {}).get("StreetName") if "EngStreet" in eng else None,
+                    "number": eng.get("EngStreet", {}).get("BuildingNoFrom") if "EngStreet" in eng else None
+                },
+                "district": eng.get("EngDistrict", {}).get("DcDistrict") if "EngDistrict" in eng else None,
+                "region": eng.get("Region")
+            }
+
+        # Chinese structured address
+        if "ChiPremisesAddress" in premises:
+            chi = premises["ChiPremisesAddress"]
+            result["zh"] = {
+                "building_name": chi.get("BuildingName"),
+                "block": chi.get("BlockNo"),
+                "phase": chi.get("PhaseNo"),
+                "street": {
+                    "name": chi.get("ChiStreet", {}).get("StreetName") if "ChiStreet" in chi else None,
+                    "number": chi.get("ChiStreet", {}).get("BuildingNoFrom") if "ChiStreet" in chi else None
+                },
+                "district": chi.get("ChiDistrict", {}).get("DcDistrict") if "ChiDistrict" in chi else None,
+                "region": chi.get("Region")
+            }
+
+        return result
+
+    def _transform_suggestion(self, suggestion: dict, lang: str) -> dict:
+        """Transform API suggestion into LLM-friendly format."""
+        addr = suggestion.get("Address", {}).get("PremisesAddress", {})
+        validation = suggestion.get("ValidationInformation", {})
+        geo = addr.get("GeospatialInformation", {})
+
+        # Determine which premises to use for formatted address
+        premises = addr.get("EngPremisesAddress" if lang == "en" else "ChiPremisesAddress", {})
+        formatted = self._format_address(premises, lang) if premises else ""
+
+        return {
+            "address": {
+                "formatted": formatted,
+                "language": lang,
+                "structured": self._parse_premises(addr)
+            },
+            "geoaddress": addr.get("GeoAddress"),
+            "coordinates": {
+                "hk1980": {
+                    "easting": float(geo.get("Easting")) if geo.get("Easting") else None,
+                    "northing": float(geo.get("Northing")) if geo.get("Northing") else None
+                },
+                "wgs84": {
+                    "lat": float(geo.get("Latitude")) if geo.get("Latitude") else None,
+                    "lon": float(geo.get("Longitude")) if geo.get("Longitude") else None
+                }
+            },
+            "score": validation.get("Score"),
+            "validation_info": {
+                "address_type": validation.get("Address_Type"),
+                "address_status": validation.get("Address_Status")
+            }
+        }
+
+    async def address_lookup(
+        self,
+        query: str,
+        n: int = 200,
+        t: int = 35,
+        b: int = 0,
+        three_d: int = 0,
+        floor: Optional[str] = None,
+        unit: Optional[str] = None,
+        lang: str = "en"
+    ) -> dict:
+        """
+        Search for addresses using text query.
+
+        Parameters:
+            query: Address text (building name, street, estate, etc.)
+            n: Maximum number of results (1-200, default 200)
+            t: Tolerance on scores (0-80, default 35)
+            b: Basic mode - disable fuzzy search (0 or 1, default 0)
+            three_d: Show 3D floor/unit info (0 or 1, default 0)
+            floor: Floor filter (when three_d=1)
+            unit: Unit filter (when three_d=1)
+            lang: Response language preference ("en" or "tc")
+        """
+        # Use "*" to get bilingual response, then filter by preference
+        headers_lang = "*"
+
+        params: Dict[str, Any] = {
+            "q": query,
+            "n": max(1, min(n, 200)),
+            "t": max(0, min(t, 80)),
+            "b": 1 if b else 0,
+        }
+
+        if three_d:
+            params["3d"] = 1
+            if floor:
+                params["floor"] = floor
+            if unit:
+                params["unit"] = unit
+
+        try:
+            client = await self.http._get_client()
+            resp = await client.get(
+                DPO_ALS_BASE,
+                params=params,
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Language": headers_lang
+                }
+            )
+
+            if resp.status_code == 400:
+                return {"error": "bad_request", "detail": "Invalid request parameters"}
+            if resp.status_code == 413:
+                return {"error": "payload_too_large", "detail": "Input address exceeds 255 characters"}
+            if resp.status_code == 429:
+                return {"error": "rate_limited", "detail": "Too many requests. Please try again later"}
+            if resp.status_code == 406:
+                return {"error": "not_acceptable", "detail": "Unsupported content type requested"}
+
+            resp.raise_for_status()
+            data = resp.json()
+
+            suggestions = data.get("SuggestedAddress", [])
+            transformed = [self._transform_suggestion(s, lang) for s in suggestions]
+
+            return {
+                "request_address": data.get("RequestAddress", {}).get("AddressLine", []),
+                "total_suggestions": len(transformed),
+                "suggestions": transformed
+            }
+
+        except httpx.HTTPError as e:
+            return {"error": "http_error", "detail": str(e)}
+        except Exception as e:
+            return {"error": "unexpected", "detail": str(e)}
+
+    async def geoaddress_lookup(
+        self,
+        geoaddress: str,
+        n: int = 200,
+        three_d: int = 0,
+        floor: Optional[str] = None,
+        unit: Optional[str] = None,
+        lang: str = "en"
+    ) -> dict:
+        """
+        Search for address using 19-character GeoAddress identifier.
+
+        Parameters:
+            geoaddress: 19-character GeoAddress (e.g., "3508215732T20110704")
+            n: Maximum number of results (1-200, default 200)
+            three_d: Show 3D floor/unit info (0 or 1, default 0)
+            floor: Floor filter (when three_d=1)
+            unit: Unit filter (when three_d=1)
+            lang: Response language preference ("en" or "tc")
+        """
+        # Validate GeoAddress format
+        if len(geoaddress) != 19:
+            return {"error": "invalid_geoaddress", "detail": "GeoAddress must be exactly 19 characters"}
+
+        headers_lang = "*"
+
+        params: Dict[str, Any] = {
+            "ga": geoaddress,
+            "n": max(1, min(n, 200)),
+        }
+
+        if three_d:
+            params["3d"] = 1
+            if floor:
+                params["floor"] = floor
+            if unit:
+                params["unit"] = unit
+
+        try:
+            client = await self.http._get_client()
+            resp = await client.get(
+                DPO_ALS_BASE,
+                params=params,
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Language": headers_lang
+                }
+            )
+
+            if resp.status_code == 400:
+                return {"error": "bad_request", "detail": "Invalid request parameters"}
+            if resp.status_code == 429:
+                return {"error": "rate_limited", "detail": "Too many requests. Please try again later"}
+
+            resp.raise_for_status()
+            data = resp.json()
+
+            suggestions = data.get("SuggestedAddress", [])
+            transformed = [self._transform_suggestion(s, lang) for s in suggestions]
+
+            return {
+                "request_geoaddress": geoaddress,
+                "total_suggestions": len(transformed),
+                "suggestions": transformed
+            }
+
+        except httpx.HTTPError as e:
+            return {"error": "http_error", "detail": str(e)}
+        except Exception as e:
+            return {"error": "unexpected", "detail": str(e)}
 
 
 # ============================================================
@@ -2573,6 +2854,9 @@ class Tools:
       - Call ONLY methods that start with:
           * hko_   (Hong Kong Observatory)
           * landsd_ (Lands Department)
+          * epd_   (Environment Protection Department)
+          * ha_    (Hospital Authority)
+          * dpo_   (Digital Policy Office)
           * td_    (Transport Department / hkbus aggregated)
       - Do NOT call internal helpers (functions starting with underscore). They are not tools.
     """
@@ -2593,6 +2877,7 @@ class Tools:
         self.transit = TransitDB(self.http, self.valves)
         self.planner = TripPlanner(self.transit, self.landsd, self.valves)
         self.ha = HAClient(self.http)
+        self.als = ALSClient(self.http)
 
     def meta(self, source: Optional[str] = None) -> dict:
         base = {"tool": "Hong Kong Open Data", "version": "0.6.0", "ts": int(now_s())}
@@ -4611,4 +4896,180 @@ class Tools:
                 "triage_category": triage_category,
             },
             "hospitals": hospitals,
+        }
+
+    # =========================
+    # DPO: Digital Policy Office - Address Lookup Service (ALS)
+    # =========================
+    async def dpo_address_lookup(
+        self,
+        query: str,
+        limit: int = 20,
+        tolerance: int = 35,
+        basic_mode: bool = False,
+        include_floor_unit: bool = True,
+        floor: Optional[str] = None,
+        unit: Optional[str] = None,
+        lang: Literal["en", "tc"] = "en",
+    ) -> dict:
+        """
+        Digital Policy Office (DPO) - Address Lookup Service (ALS).
+
+        Search for standardized Hong Kong addresses using text query with fuzzy matching.
+        Returns structured address components, GeoAddress (19-character standardized ID),
+        and both HK1980 and WGS84 coordinates.
+
+        The Address Lookup Service supports:
+        - Fuzzy matching for addresses with similar spelling or pronunciation
+        - Address validation and standardization
+        - GeoAddress assignment for consistent addressing
+
+        Address Formatting:
+        - English: Building, StreetNo StreetName, District, Region
+          Example: "CENTRAL GOVERNMENT OFFICES, 2 TIM MEI AVENUE, CENTRAL & WESTERN DISTRICT, HK"
+        - Chinese: RegionDistrictStreetName StreetNo號Building
+          Example: "香港中西區添美道 2號政府總部"
+
+        Parameters
+        ----------
+        query:
+            Address text to search (building name, street, estate, etc.)
+            Examples: "Central Government Office", "漢口中心", "Times Square"
+
+        limit:
+            Maximum number of results to return (default 20, capped at 50)
+
+        tolerance:
+            Similarity score tolerance (0-80, default 35).
+            Higher values return more results with lower similarity.
+
+        basic_mode:
+            Disable fuzzy/similar spelling search (default False).
+            Enable for exact matching only.
+
+        include_floor_unit:
+            Include 3D floor and unit information (default True).
+            Note: 3D data is only available for Housing Authority public rental housing addresses.
+
+        floor:
+            Optional floor filter when include_floor_unit=True (e.g., "10", "G")
+
+        unit:
+            Optional unit filter when include_floor_unit=True (e.g., "A", "101")
+
+        lang:
+            Response language for formatted address:
+            - "en": English
+            - "tc": Traditional Chinese
+
+        Examples
+        --------
+        Search for Central Government Offices:
+            {"query": "Central Government Office", "lang": "en"}
+
+        Search with Chinese text:
+            {"query": "漢口中心", "lang": "tc", "limit": 5}
+
+        Search with floor/unit filter (HA properties only):
+            {"query": "Wah Fu Estate", "include_floor_unit": true, "floor": "10", "unit": "A"}
+
+        Fuzzy search with lower tolerance for more results:
+            {"query": "Hankow Centre Tsim Sha Tsui", "tolerance": 50, "limit": 10}
+        """
+        result = await self.als.address_lookup(
+            query=query,
+            n=min(limit, 50),
+            t=tolerance,
+            b=1 if basic_mode else 0,
+            three_d=1 if include_floor_unit else 0,
+            floor=floor,
+            unit=unit,
+            lang=lang
+        )
+
+        if "error" in result:
+            return {**result, "meta": self.meta(source="dpo")}
+
+        return {
+            "meta": self.meta(source="dpo"),
+            "query": query,
+            "total_suggestions": result.get("total_suggestions", 0),
+            "suggestions": result.get("suggestions", [])
+        }
+
+    async def dpo_geoaddress_lookup(
+        self,
+        geoaddress: str,
+        limit: int = 20,
+        include_floor_unit: bool = True,
+        floor: Optional[str] = None,
+        unit: Optional[str] = None,
+        lang: Literal["en", "tc"] = "en",
+    ) -> dict:
+        """
+        Digital Policy Office (DPO) - GeoAddress Lookup.
+
+        Look up address details using a 19-character GeoAddress identifier.
+        GeoAddress is a standardized unique identifier assigned to each address record.
+
+        GeoAddress Format (19 characters):
+        - Characters 1-10: Geo Reference Number (Easting + Northing)
+        - Character 11: "P" (Podium) or "T" (Tower)
+        - Characters 12-19: Address record creation date (YYYYMMDD)
+
+        Example: "3508215732T20110704" = Central Government Offices
+
+        This is useful for:
+        - Retrieving standardized address from a previously saved GeoAddress
+        - Cross-referencing addresses from different systems
+        - Getting the latest validated address for a specific location
+
+        Parameters
+        ----------
+        geoaddress:
+            19-character GeoAddress identifier (e.g., "3508215732T20110704")
+
+        limit:
+            Maximum number of results (default 20, capped at 50)
+
+        include_floor_unit:
+            Include 3D floor and unit information (default True).
+            Note: Only available for Housing Authority public rental housing.
+
+        floor:
+            Optional floor filter when include_floor_unit=True
+
+        unit:
+            Optional unit filter when include_floor_unit=True
+
+        lang:
+            Response language:
+            - "en": English
+            - "tc": Traditional Chinese
+
+        Examples
+        --------
+        Look up by GeoAddress:
+            {"geoaddress": "3508215732T20110704", "lang": "en"}
+
+        Look up with floor filter:
+            {"geoaddress": "3565117476T20050430", "include_floor_unit": true, "floor": "5"}
+        """
+        result = await self.als.geoaddress_lookup(
+            geoaddress=geoaddress,
+            n=min(limit, 50),
+            three_d=1 if include_floor_unit else 0,
+            floor=floor,
+            unit=unit,
+            lang=lang
+        )
+
+        if "error" in result:
+            return {**result, "meta": self.meta(source="dpo")}
+
+        return {
+            "meta": self.meta(source="dpo"),
+            "query": {"geoaddress": geoaddress},
+            "total_suggestions": result.get("total_suggestions", 0),
+            "suggestions": result.get("suggestions", [])
         }

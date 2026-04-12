@@ -44,6 +44,18 @@ An [Open WebUI](https://github.com/open-webui/open-webui) tool providing LLM-saf
   - Data sorted by urgency (longest waits first)
 - Bilingual support (English/Traditional Chinese/Simplified Chinese)
 
+### Digital Policy Office (DPO)
+- **Address Lookup Service (ALS)**:
+  - Standardized Hong Kong address search with fuzzy matching
+  - Returns structured address components (English/Chinese)
+  - **GeoAddress** - 19-character standardized unique identifier for each address
+  - **Coordinates** - Both HK1980 grid and WGS84 latitude/longitude
+  - Address validation and similar spelling matching
+  - 3D address support (floor/unit) for Housing Authority properties
+- **GeoAddress Lookup**:
+  - Retrieve address details from GeoAddress identifier
+  - Cross-reference addresses between systems
+
 ### Transport / Transit (TD)
 - Comprehensive transit database: buses, minibuses, MTR, Light Rail, ferries
 - Real-time ETA for all major operators (KMB, CTB, GMB, MTR, LRT, ferries)
@@ -85,6 +97,9 @@ This tool is designed for natural conversation. Simply ask questions about Hong 
 - "How long is the A&E wait at Queen Elizabeth Hospital?"
 - "Which hospital has the shortest A&E waiting time?"
 - "Show me A&E waiting times for urgent cases"
+- "What's the standardized address for Central Government Office?"
+- "Look up address: 漢口中心 in Tsim Sha Tsui"
+- "Find address by GeoAddress: 3508215732T20110704"
 
 ## Credits
 
@@ -94,6 +109,7 @@ This tool aggregates data from official Hong Kong government open data sources:
 - **[Lands Department](https://www.landsd.gov.hk)** - Geospatial and location services
 - **[Environment Protection Department](https://www.epd.gov.hk)** - Air Quality Health Index (AQHI) data
 - **[Hospital Authority](https://www.ha.org.hk)** - Accident and Emergency waiting time statistics
+- **[Digital Policy Office](https://www.dpo.gov.hk)** - Address Lookup Service (ALS) for standardized Hong Kong addresses
 - **[Transport Department](https://www.td.gov.hk)** - Public transport information
 
 Transit database powered by **[HKBus (HK Bus Crawling)](https://github.com/hkbus/hk-bus-crawling)** © 2021 - Comprehensive Hong Kong bus route and stop data.
