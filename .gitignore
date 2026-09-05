@@ -32,3 +32,4 @@ ehthumbs.db
 # Cache
 hk_open_data_cache/
 *.cache
+.pytest_cache/
