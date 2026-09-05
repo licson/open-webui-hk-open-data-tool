@@ -9,7 +9,7 @@ Runtime env: Python 3.12, httpx 0.28.1, pydantic 2.13.4, pytest 9.1.1, pytest-as
 ## Goals / Non-Goals
 
 **Goals:**
-- Fully offline, deterministic pytest suite (~250 tests) covering pure helpers, `HTTPClient`, all five clients, `TransitDB` + GTFS merge + ETA fetchers, `TripPlanner`, and all 31 public tools, including error paths.
+- Fully offline, deterministic pytest suite (~250 tests) covering pure helpers, `HTTPClient`, all five clients, `TransitDB` + GTFS merge + ETA fetchers, `TripPlanner`, and all 30 public tools, including error paths.
 - Zero changes to `hk-open-data-tool.py`.
 - Opt-in live-network smoke set (`live` marker) deselected by default.
 

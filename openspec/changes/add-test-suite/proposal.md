@@ -2,11 +2,11 @@
 
 ## Why
 
-The repo ships a ~5k-line single-file Open WebUI tool with zero automated tests; every change is verified only by `python3 -m py_compile`, so regressions in the HTTP client contract, transit DB indexing, ETA normalization, trip planner, and the 31 public tools go undetected until runtime inside Open WebUI.
+The repo ships a ~5k-line single-file Open WebUI tool with zero automated tests; every change is verified only by `python3 -m py_compile`, so regressions in the HTTP client contract, transit DB indexing, ETA normalization, trip planner, and the 30 public tools go undetected until runtime inside Open WebUI.
 
 ## What Changes
 
-- Add an offline-first pytest suite (`tests/`, ~250 tests, 11 test modules) covering: pure module helpers, `HTTPClient` (caching/retry/error contract), the five department clients (HKO, LandsD, EPD, HA, ALS/DPO), `TransitDB` (index building, DB load path incl. fallbacks, GTFS ferry merge, all 9 ETA fetchers, `leg_next_departures` dispatch), `TripPlanner` (pure cost helpers + `plan()` on seeded mini-graphs), and all 31 public `Tools` methods including error paths.
+- Add an offline-first pytest suite (`tests/`, ~250 tests, 11 test modules) covering: pure module helpers, `HTTPClient` (caching/retry/error contract), the five department clients (HKO, LandsD, EPD, HA, ALS/DPO), `TransitDB` (index building, DB load path incl. fallbacks, GTFS ferry merge, all 9 ETA fetchers, `leg_next_departures` dispatch), `TripPlanner` (pure cost helpers + `plan()` on seeded mini-graphs), and all 30 public `Tools` methods including error paths.
 - Add `tests/conftest.py` backbone: importlib loader for the hyphenated module, an `httpx.MockTransport`-based router covering the module's three HTTP paths (shared client, ALS direct client, GTFS ad-hoc client), seeded transit fixtures, module-state hygiene, and a status-event recorder.
 - Add a version-sync regression test (manifest `version:` == User-Agent == `Tools.meta()`).
 - Add an opt-in live-network smoke set (`@pytest.mark.live`, deselected by default).
@@ -18,7 +18,7 @@ The repo ships a ~5k-line single-file Open WebUI tool with zero automated tests;
 ### New Capabilities
 - `test-infrastructure`: pytest scaffolding — module loading, HTTP mocking via `httpx.MockTransport` across all three HTTP paths, cache/transit fixtures, module-state hygiene, and runner configuration.
 - `unit-coverage`: tests for pure/sync helpers, `HTTPClient` contract, client-side normalizers, `TransitDB` indexing and ETA fetchers, and `TripPlanner` cost helpers.
-- `tool-coverage`: tests for all 31 public `hko_/landsd_/epd_/ha_/dpo_/td_` tool methods over mocked endpoints and seeded transit data, including error paths and event emission.
+- `tool-coverage`: tests for all 30 public `hko_/landsd_/epd_/ha_/dpo_/td_` tool methods over mocked endpoints and seeded transit data, including error paths and event emission.
 - `live-smoke`: opt-in real-network smoke tests, one call per client, deselected by default.
 
 ### Modified Capabilities

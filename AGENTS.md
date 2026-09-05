@@ -8,9 +8,12 @@ Single-file Python module `hk-open-data-tool.py` (~5k lines) shipped as an **Ope
 
 ## Verify a change
 
-- Compile check only: `python3 -m py_compile hk-open-data-tool.py`
-- There are no tests, linters, or typecheckers configured. Runtime env is Open WebUI's Python (needs `httpx`, `pydantic` v2 — note `Valves` uses `default_factory`/`Field`, i.e. pydantic v2 style).
+- Compile check: `python3 -m py_compile hk-open-data-tool.py`
+- Test suite: `python3 -m pytest` (offline, fully mocked HTTP; ~350 tests). Requires `pip install --break-system-packages pytest pytest-asyncio freezegun` once (pytest/pytest-asyncio/httpx/pydantic usually already present).
+- Opt-in live-network smoke tests: `python3 -m pytest -m live` (deselected by default; skips without network).
+- No linters or typecheckers configured. Runtime env is Open WebUI's Python (needs `httpx`, `pydantic` v2 — note `Valves` uses `default_factory`/`Field`, i.e. pydantic v2 style).
 - This is real-world proctoring: `from __future__ import annotations` is required for the `Literal[...]`/forward-ref typing under pydantic v2 — keep it.
+- Test conventions: `tests/conftest.py` loads the hyphenated module via importlib and mocks ALL egress with `httpx.MockTransport` (never hit real APIs in offline tests); a version-sync test enforces the three-spot version bump — keep it green.
 
 ## Architecture (single file, in order)
 

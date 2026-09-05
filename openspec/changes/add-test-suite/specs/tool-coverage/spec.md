@@ -13,7 +13,7 @@ The suite SHALL verify `plan()` over seeded mini-graphs with stubbed geocoding: 
 - **WHEN** the geocoder stub returns no result for the destination
 - **THEN** `plan()` returns `{"error": "location_not_found", ...}` and no itinerary
 
-### Requirement: All 31 public tools are exercised with mocked endpoints
+### Requirement: All 30 public tools are exercised with mocked endpoints
 The suite SHALL exercise every public tool method offline: 16 `hko_*`, 2 `landsd_*`, 8 `td_*`, 2 `epd_*`, 1 `ha_*`, 2 `dpo_*` — happy paths asserting response schemas (meta, data/items/suggestions/departures/itineraries) and param plumbing, plus failure paths (request failures surfaced as error dicts, bad inputs as `bad_request`).
 
 #### Scenario: HKO wrapper tools delegate with correct dataset

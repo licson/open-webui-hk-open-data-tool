@@ -101,6 +101,25 @@ This tool is designed for natural conversation. Simply ask questions about Hong 
 - "Look up address: 漢口中心 in Tsim Sha Tsui"
 - "Find address by GeoAddress: 3508215732T20110704"
 
+## Development & Testing
+
+The module is tested with an offline pytest suite (~350 tests) that mocks all
+HTTP egress via `httpx.MockTransport` — no network needed.
+
+```bash
+# one-time setup (pytest/pytest-asyncio/httpx/pydantic are usually present already)
+pip install --break-system-packages pytest pytest-asyncio freezegun
+
+python3 -m py_compile hk-open-data-tool.py   # compile check
+python3 -m pytest                            # offline suite (live tests deselected)
+python3 -m pytest -m live                    # opt-in real-network smoke tests
+```
+
+Test conventions live in `tests/conftest.py` (importlib loader for the
+hyphenated module, URL-pattern mock router, seeded transit fixtures); a
+version-sync test enforces keeping the manifest/User-Agent/`meta()` versions
+in agreement.
+
 ## Credits
 
 This tool aggregates data from official Hong Kong government open data sources:
