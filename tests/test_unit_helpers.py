@@ -145,19 +145,19 @@ class TestParseHkDt:
 
 class TestEtaMinutes:
     def test_future(self, mod, freezer):
-        freezer.freeze_time(datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc))
+        freezer.freeze(datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc))
         assert mod.eta_minutes("2026-09-05T20:10:00+08:00") == 10  # 12:10 UTC
 
     def test_slightly_past_is_clamped(self, mod, freezer):
-        freezer.freeze_time(datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc))
+        freezer.freeze(datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc))
         assert mod.eta_minutes("2026-09-05T19:59:30+08:00") == 0  # 30 s ago
 
     def test_far_past_is_none(self, mod, freezer):
-        freezer.freeze_time(datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc))
+        freezer.freeze(datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc))
         assert mod.eta_minutes("2026-09-05T19:00:00+08:00") is None  # 1 h ago
 
     def test_naive_treated_as_utc(self, mod, freezer):
-        freezer.freeze_time(datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc))
+        freezer.freeze(datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc))
         assert mod.eta_minutes("2026-09-05T12:30:00") == 30
 
     @pytest.mark.parametrize("raw", [None, "", "junk"])
@@ -258,30 +258,3 @@ class TestLimitItems:
 class TestSha256:
     def test_known_digest(self, mod):
         assert mod.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-
-
-# ------------------------------------------------------------------
-# freezegun plumbing
-# ------------------------------------------------------------------
-@pytest.fixture()
-def freezer():
-    from freezegun import freeze_time
-
-    class _Freezer:
-        def __init__(self):
-            self._cm = None
-
-        def freeze_time(self, dt):
-            self._cm = freeze_time(dt)
-            self._cm.start()
-
-        def tick(self, seconds):
-            self._cm.tick(delta=timedelta(seconds=seconds))
-
-        def stop(self):
-            if self._cm:
-                self._cm.stop()
-
-    f = _Freezer()
-    yield f
-    f.stop()

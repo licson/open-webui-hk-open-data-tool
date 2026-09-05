@@ -1,0 +1,263 @@
+"""TripPlanner tests: pure cost helpers + plan() on seeded mini-graphs."""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from conftest import mini_db
+
+HK = timezone(timedelta(hours=8))
+
+
+@pytest.fixture()
+def planner(mod, tdb_planner_parts):
+    transit, landsd, valves = tdb_planner_parts
+    return mod.TripPlanner(transit, landsd, valves)
+
+
+@pytest.fixture()
+def tdb_planner_parts(mod, seeded_tools):
+    return seeded_tools.transit, seeded_tools.landsd, seeded_tools.valves
+
+
+def geocode(monkeypatch, landsd, origin, dest):
+    """Stub the planner's geocoder with fixed coordinates."""
+
+    async def fake_location_search(q, limit=10):
+        pt = origin if "ORIGIN" in q.upper() else dest
+        if pt is None:
+            return []
+        return [{"wgs84": {"lat": pt[0], "lon": pt[1]}}]
+
+    monkeypatch.setattr(landsd, "location_search", fake_location_search)
+
+
+NEAR_S_A = (22.2799, 114.1501)  # ~15 m from S_A
+NEAR_S_D = (22.2921, 114.1500)  # ~11 m from S_D
+
+
+# ------------------------------------------------------------------
+# Pure helpers
+# ------------------------------------------------------------------
+class TestTransferPenalty:
+    @pytest.mark.parametrize(
+        ("frm", "to", "expected"),
+        [
+            (None, "bus", 0.0),
+            ("rail", "rail", 3.0),
+            ("bus", "bus", 10.0),
+            ("mtr_bus", "minibus", 10.0),  # both contain "bus"
+            ("ferry", "bus", 6.0),
+            ("bus", "ferry", 6.0),
+            ("rail", "bus", 8.0),
+            ("rail", "ferry", 6.0),
+        ],
+    )
+    def test_cases(self, planner, frm, to, expected):
+        assert planner.transfer_penalty(frm, to) == expected
+
+
+class TestModeTimes:
+    @pytest.mark.parametrize(
+        ("company", "wait", "per_stop"),
+        [
+            ("mtr", 3.0, 1.8),
+            ("lightrail", 3.0, 1.8),  # mode_of_company(lightrail) == "rail"
+            ("kmb", 8.0, 2.5),
+            ("gmb", 6.0, 1.5),
+            ("starferry", 30.0, 12.0),
+            ("sunferry", 30.0, 12.0),
+            ("hkkf", 60.0, 15.0),  # non-star/sun ferry
+        ],
+    )
+    def test_cases(self, planner, company, wait, per_stop):
+        w, ride = planner.mode_times(company, 2)
+        assert w == wait
+        assert ride == pytest.approx(per_stop * 2)
+
+
+class TestModeBit:
+    @pytest.mark.parametrize(
+        ("co", "bit"), [("mtr", 1), ("lightrail", 1), ("kmb", 2), ("ctb", 2), ("sunferry", 4), ("gmb", 8)]
+    )
+    def test_cases(self, planner, co, bit):
+        assert planner.mode_bit(co) == bit
+
+
+class TestWalkCost:
+    def test_plain_stop(self, planner):
+        # 400 m at 80 m/min, weight 1.5 -> 7.5
+        assert planner.walk_cost(400.0, "S_A") == pytest.approx(400 / 80 * 1.5)
+
+    def test_rail_discount(self, planner):
+        # S_B is an MTR station: 400 m -> effective max(50, 400-250)=150
+        assert planner.walk_cost(400.0, "S_B") == pytest.approx(150 / 80 * 1.5)
+
+    def test_rail_short_walk_undiscounted(self, planner):
+        # <=150 m: effective stays the raw distance (max(50, -100) = 50)
+        assert planner.walk_cost(100.0, "S_B") == pytest.approx(100 / 80 * 1.5)
+
+    def test_is_rail_station(self, planner):
+        assert planner.is_rail_station("S_B") is True
+        assert planner.is_rail_station("S_A") is False
+
+
+class TestIsOperatingNow:
+    SAT_NOON = datetime(2026, 9, 5, 12, 0, tzinfo=HK)  # Saturday
+
+    def test_empty_freq_is_operating(self, planner):
+        assert planner.is_operating_now({}) is True
+        assert planner.is_operating_now(None) is True
+
+    def test_window_hit_and_miss(self, planner):
+        freq = {"127": {"0700": ["1900", 20]}}
+        assert planner.is_operating_now(freq, projected_dt=self.SAT_NOON) is True
+        late = datetime(2026, 9, 5, 20, 30, tzinfo=HK)
+        assert planner.is_operating_now(freq, projected_dt=late) is False
+
+    def test_day_mask_filtering(self, planner):
+        freq = {"64": {"0000": ["2359", 10]}}  # Sunday only
+        sun = datetime(2026, 9, 6, 12, 0, tzinfo=HK)
+        assert planner.is_operating_now(freq, projected_dt=sun) is True
+        assert planner.is_operating_now(freq, projected_dt=self.SAT_NOON) is False
+
+    def test_pre_4am_uses_previous_service_day(self, planner):
+        # Sun 02:00 HKT belongs to Saturday's service day; hour rolls to 26
+        freq = {"32": {"2500": ["2900", 30]}}  # Saturday 25:00-29:00
+        wee = datetime(2026, 9, 6, 2, 0, tzinfo=HK)
+        assert planner.is_operating_now(freq, projected_dt=wee) is True
+
+    def test_holiday_follows_sunday_schedule(self, mod, planner):
+        planner.transit._holidays.add("20261001")  # Thursday, National Day
+        freq = {"64": {"0900": ["1800", 15]}}  # Sunday schedule
+        hol = datetime(2026, 10, 1, 12, 0, tzinfo=HK)
+        assert planner.is_operating_now(freq, projected_dt=hol) is True
+        planner.transit._holidays.discard("20261001")
+        assert planner.is_operating_now(freq, projected_dt=hol) is False
+
+    def test_midnight_wrap_window(self, planner):
+        freq = {"127": {"2330": ["0030", 20]}}  # wraps past midnight
+        night = datetime(2026, 9, 5, 23, 50, tzinfo=HK)
+        assert planner.is_operating_now(freq, projected_dt=night) is True
+
+    def test_fixed_departures_padded(self, planner):
+        freq = {"127": {"0700": None, "1900": None}}
+        after_last = datetime(2026, 9, 5, 19, 50, tzinfo=HK)
+        assert planner.is_operating_now(freq, projected_dt=after_last) is True  # within +100 pad
+        too_late = datetime(2026, 9, 5, 21, 0, tzinfo=HK)
+        assert planner.is_operating_now(freq, projected_dt=too_late) is False
+
+    def test_invalid_day_mask_returns_true(self, planner):
+        assert planner.is_operating_now({"junk": {"0700": ["1900", 10]}}, projected_dt=self.SAT_NOON) is True
+
+
+# ------------------------------------------------------------------
+# plan() on the mini graph
+# ------------------------------------------------------------------
+class TestPlan:
+    async def test_single_leg_itinerary(self, mod, seeded_tools, monkeypatch, emitter):
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, NEAR_S_D)
+        out = await seeded_tools.planner.plan("ORIGIN place", "DEST place", __event_emitter__=emitter)
+        assert "error" not in out, out
+        assert out["origin"]["label"] == "ORIGIN place"
+        itins = out["itineraries"]
+        assert itins, "expected at least one itinerary"
+        one_leg = [i for i in itins if len(i["legs"]) == 1]
+        assert one_leg, f"expected a direct itinerary, got {[len(i['legs']) for i in itins]}"
+        leg = one_leg[0]["legs"][0]
+        assert leg["board_stop"]["stop_id"] == "S_A"
+        assert leg["alight_stop"]["stop_id"] == "S_D"
+        assert leg["route"]["route"] == "3"
+        assert leg["mode"] in ("bus", "minibus")
+
+    async def test_itinerary_schema(self, mod, seeded_tools, monkeypatch):
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, NEAR_S_D)
+        out = await seeded_tools.planner.plan("ORIGIN", "DEST")
+        i = out["itineraries"][0]
+        for key in ("tags", "score", "summary", "legs"):
+            assert key in i, key
+        for key in ("transfers", "walk_m", "time_min_est"):
+            assert key in i["summary"], key
+        for key in ("mode", "operator", "route", "board_stop", "alight_stop", "next_departures"):
+            assert key in i["legs"][0], key
+        assert "diagnostics" in out
+        for key in ("expansions", "goals_found", "goals_valid", "deadline_hit", "eta_checks"):
+            assert key in out["diagnostics"], key
+        assert "fastest" in i["tags"] or any("fastest" in x["tags"] for x in out["itineraries"])
+
+    async def test_transfer_itinerary(self, mod, seeded_tools, monkeypatch):
+        # remove the direct GMB route -> best options need a transfer
+        seeded_tools.transit._route_list.pop("3+gmb+direct")
+        seeded_tools.transit._build_indices(
+            {"stopList": seeded_tools.transit._stop_list, "routeList": seeded_tools.transit._route_list, "holidays": []}
+        )
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, NEAR_S_D)
+        out = await seeded_tools.planner.plan("ORIGIN", "DEST")
+        assert "error" not in out
+        multi = [i for i in out["itineraries"] if len(i["legs"]) == 2]
+        assert multi, f"expected a transfer itinerary, got {[len(i['legs']) for i in out['itineraries']]}"
+
+    async def test_location_not_found(self, seeded_tools, monkeypatch, emitter):
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, None)
+        out = await seeded_tools.planner.plan("ORIGIN", "NOWHERE", __event_emitter__=emitter)
+        assert out["error"] == "location_not_found"
+        assert emitter.events[0]["data"]["done"] is False
+        assert emitter.events[-1]["data"]["done"] is True
+
+    async def test_no_nearby_stops(self, seeded_tools, monkeypatch):
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, (10.0, 10.0))  # far from HK
+        out = await seeded_tools.planner.plan("ORIGIN", "DEST")
+        assert out["error"] == "no_nearby_stops"
+        assert "destination" in out["detail"]
+
+    async def test_limit_clamped_to_5(self, seeded_tools, monkeypatch):
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, NEAR_S_D)
+        out = await seeded_tools.planner.plan("ORIGIN", "DEST", limit=99)
+        assert len(out["itineraries"]) <= 5
+
+    async def test_max_transfers_one_forces_direct(self, seeded_tools, monkeypatch):
+        # max_transfers caps boardings (legs = transfers + 1), see Valves note
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, NEAR_S_D)
+        out = await seeded_tools.planner.plan("ORIGIN", "DEST", max_transfers=1)
+        assert "error" not in out
+        assert all(len(i["legs"]) == 1 for i in out["itineraries"])
+
+    async def test_status_events_sequence(self, seeded_tools, monkeypatch, emitter):
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, NEAR_S_D)
+        await seeded_tools.planner.plan("ORIGIN", "DEST", __event_emitter__=emitter)
+        assert len(emitter.events) >= 2
+        assert all(e["type"] == "status" for e in emitter.events)
+        assert emitter.events[0]["data"]["description"].startswith("Resolving")
+        assert emitter.events[-1]["data"]["description"] == "Done."
+        assert emitter.events[-1]["data"]["done"] is True
+
+    async def test_first_leg_live_eta_substitution(self, seeded_tools, monkeypatch):
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, NEAR_S_D)
+        calls = []
+
+        async def fake_departures(company, route_id, board_stop_id, board_seq, limit_etas=2, lang="en"):
+            calls.append((company, route_id, board_stop_id))
+            return [{"eta": {"minutes": 25, "iso": None, "text": "25 min"}}]
+
+        monkeypatch.setattr(seeded_tools.transit, "leg_next_departures", fake_departures)
+        out = await seeded_tools.planner.plan("ORIGIN", "DEST")
+        assert calls, "planner should fetch a live ETA for the first leg"
+        for i in out["itineraries"]:
+            assert i["summary"]["time_min_est"] >= 25.0
+
+    async def test_champion_tags(self, seeded_tools, monkeypatch):
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, NEAR_S_D)
+        out = await seeded_tools.planner.plan("ORIGIN", "DEST", limit=5)
+        all_tags = {t for i in out["itineraries"] for t in i["tags"]}
+        assert "fastest" in all_tags
+        if len(out["itineraries"]) > 1:
+            assert "fewest_transfers" in all_tags
+
+    async def test_td_plan_trip_passthrough(self, seeded_tools, monkeypatch, emitter):
+        geocode(monkeypatch, seeded_tools.landsd, NEAR_S_A, NEAR_S_D)
+        out = await seeded_tools.td_plan_trip("ORIGIN", "DEST", __event_emitter__=emitter)
+        assert "error" not in out
+        assert out["meta"]["data_source"] == "hkbus DB + Transport Department APIs"
+        assert out["itineraries"]

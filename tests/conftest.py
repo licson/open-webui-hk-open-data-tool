@@ -15,6 +15,7 @@ import sys
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
+from datetime import timedelta
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import httpx
@@ -292,6 +293,7 @@ def gtfs_zip_bytes(files: Dict[str, str]) -> bytes:
 # Route 2 (kmb "2"): S_E -> S_D
 # MTR route "ISL": S_B -> S_E (rail transfer alternative)
 # GMB route "3": S_A -> S_D direct minibus (no freq -> always operating)
+# LRT route "507": 1520 -> 1521 (numeric station ids required by the LRT API)
 def mini_db() -> dict:
     return {
         "stopList": {
@@ -300,6 +302,8 @@ def mini_db() -> dict:
             "S_C": stop("S_C", "North Gate", 22.2880, 114.1500, "北門"),
             "S_D": stop("S_D", "North Terminus", 22.2920, 114.1500, "北端總站"),
             "S_E": stop("S_E", "East Gate", 22.2860, 114.1540, "東門"),
+            "1520": stop("1520", "Light Rail Mid", 22.2841, 114.1501, "輕鐵中"),
+            "1521": stop("1521", "Light Rail North", 22.2862, 114.1505, "輕鐵北"),
         },
         "routeList": {
             "1+kmb+south+north": route(
@@ -339,18 +343,29 @@ def mini_db() -> dict:
                 bound={"gmb": "O"},
                 gtfs_id="2006-1",
             ),
+            "507+1+lrt": route(
+                "507+1+lrt",
+                ["lightrail"],
+                {"lightrail": ["1520", "1521"]},
+                route_no="507",
+                orig_en="Light Rail Mid",
+                dest_en="Light Rail North",
+                bound={"lightrail": "O"},
+            ),
         },
         "holidays": [],
     }
 
 
 @pytest.fixture()
-def seeded_tools(mod, tools, monkeypatch):
-    """Tools whose TransitDB is seeded directly from mini_db()."""
+def seeded_tools(mod, mocked_tools, router):
+    """Tools whose TransitDB is seeded directly from mini_db(), sharing the
+    mocked HTTP client (so ETA fetches hit the router)."""
     tdb = build_transit(mod, mini_db())
-    tools.transit = tdb
-    tools.planner = mod.TripPlanner(tdb, tools.landsd, tools.valves)
-    return tools
+    tdb.http = mocked_tools.http
+    mocked_tools.transit = tdb
+    mocked_tools.planner = mod.TripPlanner(tdb, mocked_tools.landsd, mocked_tools.valves)
+    return mocked_tools
 
 
 # ------------------------------------------------------------------
@@ -386,3 +401,28 @@ helpers = SimpleNamespace(
     make_valves=make_valves,
     hk_dt=hk_dt,
 )
+
+
+@pytest.fixture()
+def freezer():
+    """Freezegun helper: freeze(dt), tick(seconds); auto-stops."""
+    from freezegun import freeze_time
+
+    class _Freezer:
+        def __init__(self):
+            self._cm = None
+
+        def freeze(self, dt):
+            self._cm = freeze_time(dt)
+            self._cm.start()
+
+        def tick(self, seconds):
+            self._cm.tick(delta=timedelta(seconds=seconds))
+
+        def stop(self):
+            if self._cm:
+                self._cm.stop()
+
+    f = _Freezer()
+    yield f
+    f.stop()
