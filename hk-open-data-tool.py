@@ -1513,6 +1513,7 @@ class TransitDB:
         self._grid: Dict[Tuple[int, int], List[str]] = {}
         self._grid_cell: float = 0.004
         self._transfer_edges: Dict[str, List[Tuple[str, float]]] = {}
+        self._holidays: set = set()
 
     def meta(self) -> dict:
         return {
@@ -1600,6 +1601,8 @@ class TransitDB:
         if not isinstance(self._route_list, dict):
             self._route_list = {}
 
+        self._holidays = {str(x) for x in (db.get("holidays") or []) if x}
+
         stop_to_routes: Dict[str, List[StopOcc]] = {}
         route_company_stops: Dict[Tuple[str, str], List[str]] = {}
         route_company_stop_index: Dict[Tuple[str, str], Dict[str, int]] = {}
@@ -1610,10 +1613,15 @@ class TransitDB:
             stops = r.get("stops")
             if not isinstance(stops, dict):
                 continue
+            allowed_cos = {norm_co(c) for c in (r.get("co") or []) if isinstance(c, str)}
             for co_raw, seq in stops.items():
                 if not isinstance(seq, list):
                     continue
                 co = norm_co(co_raw)
+                # `stops` can carry non-company keys (e.g. a bound letter for
+                # merged GTFS ferry routes); only index real operators.
+                if allowed_cos and co not in allowed_cos:
+                    continue
                 key = (rid, co)
                 route_company_stops[key] = [str(x) for x in seq if isinstance(x, str)]
                 idx = {}
@@ -1648,6 +1656,15 @@ class TransitDB:
         self._grid = grid
         self._grid_cell = cell_size
 
+        # Ferry piers and rail stations must stay walkable even in dense areas
+        # where the nearest-30 cap would otherwise crowd them out.
+        interchange_ids = set()
+        for sid, occs in stop_to_routes.items():
+            for o in occs:
+                if mode_of_company(o.company) in ("ferry", "rail"):
+                    interchange_ids.add(sid)
+                    break
+
         transfer_edges: Dict[str, List[Tuple[str, float]]] = {}
         for sid, s in self._stop_list.items():
             loc = s.get("location") or {}
@@ -1676,7 +1693,12 @@ class TransitDB:
                             near.append((sid2, dist))
 
             near.sort(key=lambda x: x[1])
-            transfer_edges[sid] = near[:30]
+            edges = near[:30]
+            if len(near) > 30:
+                kept = {s2 for s2, _ in edges}
+                extra = [(s2, d) for s2, d in near[30:] if s2 in interchange_ids and s2 not in kept]
+                edges.extend(extra[:12])
+            transfer_edges[sid] = edges
 
         self._transfer_edges = transfer_edges
 
@@ -1928,7 +1950,7 @@ class TransitDB:
                 "service_type": 1,
                 "serviceType": "1",
                 "bound": {rt_info["agency"]: bound_letter},
-                "stops": {rt_info["agency"]: stop_ids, bound_letter: stop_ids},
+                "stops": {rt_info["agency"]: stop_ids},
                 "freq": route_freq,
             }
 
@@ -2475,43 +2497,52 @@ class TripPlanner:
         return 1 if m == "rail" else 2 if m == "bus" else 4 if m == "ferry" else 8
 
     def is_operating_now(self, freq_data: dict, expected_bound: str = "", projected_dt: Optional[datetime] = None) -> bool:
+        # hkbus freq format (shared by the merged GTFS ferries):
+        #   {day_mask: {start_hhmm: [end_hhmm, headway] | None}}
+        # day_mask bits: Mon=1 ... Sun=64 (matches the DB's serviceDayMap);
+        # 128/256 are public-holiday variants.
         if not freq_data or not isinstance(freq_data, dict):
             return True
         now_hk = projected_dt or datetime.now(HK_TZ)
         hour = now_hk.hour
-        day_of_week = now_hk.weekday()
+        service_date = now_hk - timedelta(days=1) if hour < 4 else now_hk
         if hour < 4:
             hour += 24
-            day_of_week = (day_of_week - 1) % 7
-        current_time_str = f"{hour:02d}{now_hk.minute:02d}"
-        today_bit = 1 << day_of_week
-        bounds_to_check = [expected_bound] if expected_bound and expected_bound in freq_data else list(freq_data.keys())
-        for b in bounds_to_check:
-            bound_schedules = freq_data.get(b, {})
-            if not isinstance(bound_schedules, dict):
+        cur = hour * 100 + now_hk.minute
+        today_bit = 1 << service_date.weekday()
+        if service_date.strftime("%Y%m%d") in getattr(self.transit, "_holidays", set()):
+            today_bit = 64 | 128  # public holidays follow Sunday/holiday schedules
+        for day_mask_str, schedule in freq_data.items():
+            try:
+                day_mask = int(day_mask_str)
+            except (TypeError, ValueError):
+                return True
+            if not (day_mask & today_bit):
                 continue
-            matching_schedules = []
-            for day_mask_str, schedule in bound_schedules.items():
+            if not isinstance(schedule, dict):
+                continue
+            fixed_times = []
+            for start_str, value in schedule.items():
                 try:
-                    day_mask = int(day_mask_str)
-                    if (day_mask & today_bit) > 0 or (day_mask & 128) > 0 or (day_mask & 256) > 0:
-                        matching_schedules.append(schedule)
-                except ValueError:
-                    return True
-            for schedule in matching_schedules:
-                if not isinstance(schedule, dict):
+                    start = int(start_str)
+                except (TypeError, ValueError):
                     continue
-                fixed_times = []
-                for start_str, value in schedule.items():
-                    if value is None:
-                        fixed_times.append(start_str)
-                    elif isinstance(value, list) and len(value) >= 1:
-                        end_str = str(value[0])
-                        if start_str <= current_time_str <= end_str:
-                            return True
-                if fixed_times:
-                    if min(fixed_times) <= current_time_str <= max(fixed_times):
+                if value is None:
+                    fixed_times.append(start)
+                elif isinstance(value, list) and len(value) >= 1:
+                    try:
+                        end = int(str(value[0]))
+                    except (TypeError, ValueError):
+                        continue
+                    if end < start:
+                        end += 2400  # frequency window wraps past midnight
+                    if start <= cur <= end:
                         return True
+            if fixed_times:
+                # Pad the last fixed departure by an hour so mid-route boardings
+                # on the day's final run still count as in service.
+                if min(fixed_times) <= cur <= max(fixed_times) + 100:
+                    return True
         return False
 
     async def plan(
@@ -2527,7 +2558,10 @@ class TripPlanner:
         import heapq
         preferences = preferences or {}
         limit = max(1, min(int(limit), 5))
-        max_transfers = int(max_transfers) if max_transfers is not None else 6
+        transfers_cap = max(1, int(getattr(self.valves, "plan_max_transfers_cap", 10)))
+        if max_transfers is None:
+            max_transfers = int(getattr(self.valves, "plan_default_max_transfers", 6))
+        max_transfers = max(0, min(int(max_transfers), transfers_cap))
 
         if __event_emitter__:
             await __event_emitter__({"type": "status", "data": {"description": "Resolving locations…", "done": False}})
@@ -2560,12 +2594,20 @@ class TripPlanner:
         def get_knn_stops(pt, k=25, max_radius=800):
             near = self.transit.nearby_stop_ids(pt[0], pt[1], radius_m=max_radius, limit=k)
             if not near:
-                near = self.transit.nearby_stop_ids(pt[0], pt[1], radius_m=4000, limit=3)
+                # Remote places (island piers, trailheads) may only have a
+                # handful of distant stops; widen the net before giving up.
+                near = self.transit.nearby_stop_ids(pt[0], pt[1], radius_m=4000, limit=5)
             return {sid: dist for sid, dist in near}
 
         o_candidates = get_knn_stops(o_pt, k=25)
         d_candidates = get_knn_stops(d_pt, k=25)
         d_set = set(d_candidates.keys())
+
+        if not o_candidates or not d_candidates:
+            which = "origin" if not o_candidates else "destination"
+            if __event_emitter__:
+                await __event_emitter__({"type": "status", "data": {"description": f"No transit stops near the {which}.", "done": True}})
+            return {"error": "no_nearby_stops", "detail": f"No public transport stops found within 4 km of the {which}. Try a more specific or different {which} place name."}
 
         approach_goal_tails = {}
         for dsid in d_set:
@@ -2617,6 +2659,8 @@ class TripPlanner:
         expansions = 0
         global_best_cost = float("inf")
         eta_validity_cache = {}
+        max_expansions = int(getattr(self.valves, "plan_max_expansions", self.MAX_EXPANSIONS))
+        deadline = now_s() + float(getattr(self.valves, "plan_max_runtime_s", 20.0))
 
         async def is_leg_active(L: dict) -> bool:
             co = norm_co(L["company"])
@@ -2640,18 +2684,18 @@ class TripPlanner:
                 bounds = r.get("bound", {}) if isinstance(r.get("bound"), dict) else {}
                 bound = str(bounds.get(co, bounds.get(co.lower(), "")) or "")
                 is_scheduled_now = self.is_operating_now(freq_data, bound, projected_dt)
-            if not is_scheduled_now:
-                eta_validity_cache[cache_key] = False
-                return False
+            if is_scheduled_now:
+                eta_validity_cache[cache_key] = True
+                return True
+            # Outside the scheduled window: rescue with a live ETA before rejecting.
             board_seq = L.get("board_seq")
             if board_seq is None:
                 idxmap = self.transit._route_company_stop_index.get((rid, co), {})
                 board_seq = idxmap.get(bid, 0)
             etas = await self.transit.leg_next_departures(co, rid, bid, board_seq, limit_etas=1, lang=lang)
             has_live_eta = any(e.get("eta", {}).get("minutes") is not None for e in (etas or []))
-            is_valid = has_live_eta or is_scheduled_now
-            eta_validity_cache[cache_key] = is_valid
-            return is_valid
+            eta_validity_cache[cache_key] = has_live_eta
+            return has_live_eta
 
         async def is_candidate_valid(legs: list) -> bool:
             for L in legs:
@@ -2659,7 +2703,7 @@ class TripPlanner:
                     return False
             return True
 
-        while pq and expansions < self.MAX_EXPANSIONS:
+        while pq and expansions < max_expansions:
             f_score, perceived_cost, actual_time, walk_m, _, st = heapq.heappop(pq)
             if best_goals and f_score > global_best_cost * 1.25 and len(best_goals) >= 10:
                 break
@@ -2669,6 +2713,8 @@ class TripPlanner:
             expansions += 1
             if expansions % 10 == 0:
                 await asyncio.sleep(0)
+                if now_s() > deadline:
+                    break
                 if __event_emitter__ and expansions % 100 == 0:
                     msg = f"Running A* Search... (Explored {expansions:,} transit combinations)"
                     await __event_emitter__({"type": "status", "data": {"description": msg, "done": False}})
@@ -2683,10 +2729,6 @@ class TripPlanner:
                 total_walk = walk_m + final_walk
                 total_actual_time = actual_time + final_walk_time
                 total_perceived = perceived_cost + (final_walk_time * self.WALK_WEIGHT * walk_penalty_multiplier)
-                if total_perceived < global_best_cost:
-                    global_best_cost = total_perceived
-                if not await is_candidate_valid(st["legs"]):
-                    continue
                 if total_perceived < global_best_cost:
                     global_best_cost = total_perceived
                 best_goals.append({"perceived_cost": total_perceived, "actual_time": total_actual_time, "walk_m": total_walk, "transfers": tx, "legs": list(st["legs"]), "modes": modes, "final_stop": cur})
@@ -2715,14 +2757,10 @@ class TripPlanner:
                     total_actual_time = actual_time + wait_time + ride_time + final_walk_time
                     tail_perceived = (wait_time * self.WAIT_WEIGHT) + (ride_time * self.RIDE_WEIGHT) + tx_penalty + (final_walk_time * self.WALK_WEIGHT)
                     total_perceived = perceived_cost + tail_perceived
-                    if total_perceived < global_best_cost:
-                        global_best_cost = total_perceived
                     nlegs = list(st["legs"])
                     tail_copy = tail.copy()
                     tail_copy["board_time_minutes"] = actual_time
                     nlegs.append(tail_copy)
-                    if not await is_candidate_valid(nlegs):
-                        continue
                     if total_perceived < global_best_cost:
                         global_best_cost = total_perceived
                     best_goals.append({"perceived_cost": total_perceived, "actual_time": total_actual_time, "walk_m": total_walk, "transfers": ntx, "legs": nlegs, "modes": modes | self.mode_bit(tail["company"]), "final_stop": final_stop})
@@ -2744,7 +2782,7 @@ class TripPlanner:
                             break
                     if not dominated:
                         pareto_visited.setdefault(neighbor, []).append((nw, ncost, tx, modes))
-                        nst = {"cur": neighbor, "walk": nw, "actual_time": nt_actual, "perceived_cost": ncost, "tx": tx, "modes": modes, "legs": list(st["legs"])}
+                        nst = {"cur": neighbor, "walk": nw, "actual_time": nt_actual, "perceived_cost": ncost, "tx": tx, "modes": modes, "legs": list(st["legs"]), "last_was_walk": True}
                         nf = ncost + (h_time(neighbor) * 1.5)
                         heapq.heappush(pq, (nf, ncost, nt_actual, nw, push_id, nst))
                         push_id += 1
@@ -2785,10 +2823,30 @@ class TripPlanner:
                         heapq.heappush(pq, (nf, ncost, nt_actual, walk_m, push_id, nst))
                         push_id += 1
 
+        # Validate candidates only after the search: schedule checks are pure
+        # CPU, but live-ETA rescues are network calls that must not eat the
+        # search's wall-clock budget.
+        best_goals.sort(key=lambda g: g["perceived_cost"])
+        validated = []
+        for g in best_goals[:80]:
+            if len(validated) >= 30:
+                break
+            if await is_candidate_valid(g["legs"]):
+                validated.append(g)
+
+        diagnostics = {
+            "expansions": expansions,
+            "goals_found": len(best_goals),
+            "goals_valid": len(validated),
+            "deadline_hit": now_s() > deadline,
+            "eta_checks": len(eta_validity_cache),
+        }
+        best_goals = validated
+
         if not best_goals:
             if __event_emitter__:
                 await __event_emitter__({"type": "status", "data": {"description": "Could not find a feasible route.", "done": True}})
-            return {"error": "no_route_found", "detail": "Could not find a feasible route."}
+            return {"error": "no_route_found", "detail": "Could not find a feasible route.", "diagnostics": diagnostics}
 
         champion_fastest = min(best_goals, key=lambda x: x["actual_time"])
         champion_direct = min(best_goals, key=lambda x: (x["transfers"], x["actual_time"]))
@@ -2824,10 +2882,13 @@ class TripPlanner:
             formatted_legs = []
             g.pop("_sig", None)
             first_leg = g["legs"][0]
-            live_etas = await self.transit.leg_next_departures(first_leg["company"], first_leg["route_id"], first_leg["board_stop_id"], 0, limit_etas=1, lang=lang)
+            first_co = norm_co(first_leg["company"])
+            first_seq = self.transit._route_company_stop_index.get((first_leg["route_id"], first_co), {}).get(first_leg["board_stop_id"], 0)
+            live_etas = await self.transit.leg_next_departures(first_leg["company"], first_leg["route_id"], first_leg["board_stop_id"], first_seq, limit_etas=1, lang=lang)
             live_wait = live_etas[0].get("eta", {}).get("minutes") if live_etas else None
             if live_wait is not None:
-                g["actual_time"] = (g["actual_time"] - 5.0) + float(live_wait)
+                modeled_wait, _ = self.mode_times(first_co, 0)
+                g["actual_time"] = max(g["actual_time"] - modeled_wait + float(live_wait), 1.0)
             for L in g["legs"]:
                 rlt = self.transit.route_lite(L["route_id"])
                 b = self.transit.stop_lite(L["board_stop_id"])
@@ -2840,7 +2901,7 @@ class TripPlanner:
         if __event_emitter__:
             await __event_emitter__({"type": "status", "data": {"description": "Done.", "done": True}})
 
-        return {"meta": {}, "origin": {"label": origin_place}, "destination": {"label": destination_place}, "itineraries": itineraries[:limit]}
+        return {"meta": {}, "origin": {"label": origin_place}, "destination": {"label": destination_place}, "itineraries": itineraries[:limit], "diagnostics": diagnostics}
 
 
 # ============================================================
