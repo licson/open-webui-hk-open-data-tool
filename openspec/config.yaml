@@ -1,0 +1,26 @@
+schema: spec-driven
+
+context: |
+  Single-file Python module `hk-open-data-tool.py` (~5k lines) shipped as an
+  Open WebUI tool (copy-pasted into Open WebUI's tools menu; not packaged).
+  Wraps Hong Kong open-data APIs: HKO (weather/climate), LandsD (geocoding),
+  EPD (air quality), HA (A&E waiting times), DPO/ALS (address lookup), and a
+  transit layer (hkbus DB + TD/GTFS data) with an A* trip planner.
+
+  Conventions:
+  - Public tool methods are prefixed hko_/landsd_/epd_/ha_/dpo_/td_; internal helpers start with _
+  - No raw data-dump endpoints; responses are curated for LLM consumption
+  - HTTPClient.request returns {"error": "request_failed", ...} dicts instead of raising
+  - Caching is opt-in per request: cache_scope="mem"|"disk"|"none"; ETAs use short TTLs
+  - Runtime env: Open WebUI's Python (httpx, pydantic v2); dev tooling: pytest, pytest-asyncio, freezegun
+  - Conventional commits: feat:/fix:/docs:/refactor:/chore:/test:
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
