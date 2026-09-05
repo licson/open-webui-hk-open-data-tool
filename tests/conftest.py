@@ -155,12 +155,10 @@ def patch_async_client(monkeypatch, mod, router: Router) -> None:
 # ------------------------------------------------------------------
 # Tools / Valves
 # ------------------------------------------------------------------
-def make_valves(mod, cache_dir: Path) -> "mod.Valves":
-    return mod.Valves(
-        cache_dir=str(cache_dir),
-        http_retries=0,
-        http_timeout_s=2,
-    )
+def make_valves(mod, cache_dir: Path, **overrides) -> "mod.Valves":
+    kwargs = {"cache_dir": str(cache_dir), "http_retries": 0, "http_timeout_s": 2}
+    kwargs.update(overrides)
+    return mod.Valves(**kwargs)
 
 
 @pytest.fixture()
