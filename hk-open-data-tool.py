@@ -4664,6 +4664,8 @@ class Tools:
         max_transfers: Optional[int] = None,
         preferences: Optional[dict] = None,
         lang: Literal["en", "tc", "sc"] = "en",
+        start_at: Optional[str] = None,
+        arrive_at: Optional[str] = None,
         __event_emitter__: Optional[Any] = None,
     ) -> dict:
         """
@@ -4675,6 +4677,22 @@ class Tools:
         It also uses K-Nearest Neighbors (KNN) to resolve transit stops, allowing it to
         gracefully handle rural destinations (like Hoi Ha or Pak Tam Chung) that require
         longer initial/final walks.
+
+        Time-aware planning (optional):
+          - Leave `start_at`/`arrive_at` unset to plan for a departure right now
+            (the default, live ETAs are fetched for the first leg).
+          - `start_at`: depart no earlier than this time (an absolute ISO-8601
+            timestamp or a bare "HH:MM" which is interpreted as the next such
+            wall-clock time). A past time is clamped to now.
+          - `arrive_at`: arrive by this time (reverse-solved with a 5-minute
+            buffer); a past time is rejected.
+          - With both, itineraries fit the window: depart no earlier than
+            `start_at` and arrive by `arrive_at` where possible.
+          All times are Hong Kong time (UTC+08:00); naive ISO-8601 values are
+          assumed HK time. For future departures, ferry frequency schedules are
+          honored, but bus/MTR departures are modeled estimates (the live feed
+          cannot predict them); see `arrival_status` ("at_target" | "overrun")
+          for whether each itinerary meets an `arrive_at` target.
 
         Parameters
         ----------
@@ -4694,6 +4712,13 @@ class Tools:
             A* algorithm automatically balances mode selection).
         lang : {"en", "tc", "sc"}, optional
             Response language for labels and stop names. Default is "en".
+        start_at : str, optional
+            Depart no earlier than this time. ISO-8601 (e.g. "2026-09-08T07:00")
+            or a bare "HH:MM" clock (next occurrence, e.g. "18:30"). Hong Kong time.
+        arrive_at : str, optional
+            Arrive by this time. ISO-8601 or bare "HH:MM" clock. Hong Kong time.
+        __event_emitter__ : optional
+            Async callback for human-readable status events (Open WebUI).
 
         Returns
         -------
@@ -4701,9 +4726,13 @@ class Tools:
             A structured dictionary containing:
             - meta: Tool metadata.
             - origin / destination: Resolved labels.
-            - itineraries: A ranked list of trip options. Each itinerary includes a
-              summary (score, time, distance, transfers) and a sequence of legs
-              (walk, bus, rail, ferry) with live ETAs fetched for the first departure.
+            - timing: (when a time reference is supplied) the interpreted
+              departure/arrival times and mode.
+            - itineraries: A ranked list of trip options. Each itinerary includes
+              a summary (score, time, distance, transfers; plus departure/arrival
+              clocks and arrival_status when time-aware) and a sequence of legs
+              (walk, bus, rail, ferry). Live ETAs are fetched only for the first
+              departure when planning for "now".
 
         Examples
         --------
@@ -4722,10 +4751,57 @@ class Tools:
                 "max_transfers": 4,
                 "lang": "tc"
             }
+
+        3) Arrive by a wall-clock time:
+            {
+                "origin_place": "Causeway Bay",
+                "destination_place": "Cheung Chau",
+                "arrive_at": "18:30"
+            }
+
+        4) Leave no earlier than an absolute time:
+            {
+                "origin_place": "Mong Kok",
+                "destination_place": "Hoi Ha",
+                "start_at": "2026-09-08T07:00"
+            }
         """
 
         await self.transit.ensure_loaded()
-        result = await self.planner.plan(origin_place, destination_place, limit, max_transfers, preferences, lang, __event_emitter__)
+
+        # Resolve optional clock strings at the tool layer; the planner itself
+        # only ever sees tz-aware datetimes.
+        start_dt: Optional[datetime] = None
+        arrive_dt: Optional[datetime] = None
+        now_hk = datetime.now(HK_TZ)
+        if start_at:
+            start_dt = _resolve_clock_time(start_at, future_only=True, now_hk=now_hk)
+            if start_dt is None:
+                return {"error": "bad_time", "detail": f"Cannot parse start_at: {start_at!r}. Use ISO-8601 (e.g. '2026-09-08T07:00') or a bare 'HH:MM' clock.", "param": "start_at", "val": start_at}
+        if arrive_at:
+            arrive_dt = _resolve_clock_time(arrive_at, future_only=False, now_hk=now_hk)
+            if arrive_dt is None or arrive_dt < now_hk:
+                return {"error": "bad_time", "detail": f"Cannot parse arrive_at: {arrive_at!r}. Use ISO-8601 (e.g. '2026-09-08T18:00') or a bare 'HH:MM' clock not in the past.", "param": "arrive_at", "val": arrive_at}
+        if start_dt is not None and arrive_dt is not None and start_dt >= arrive_dt:
+            return {
+                "error": "time_conflict",
+                "detail": "start_at must be before arrive_at.",
+                "timing": {"start_at": _iso_ts(start_dt), "arrive_at": _iso_ts(arrive_dt), "timezone": "Asia/Hong_Kong"},
+            }
+
+        result = await self.planner.plan(origin_place, destination_place, limit, max_transfers, preferences, lang, __event_emitter__, start_dt, arrive_dt)
+
+        # Timing echo: report the interpreted absolute times so a bare "18:30"
+        # or a clamped past time is never ambiguous to the caller.
+        if (start_dt is not None or arrive_dt is not None) and "error" not in result:
+            mode = "window" if (start_dt is not None and arrive_dt is not None) else ("depart_by" if start_dt is not None else "arrive_by")
+            timing = {"mode": mode, "timezone": "Asia/Hong_Kong"}
+            if start_dt is not None:
+                timing["start_at"] = _iso_ts(start_dt)
+            if arrive_dt is not None:
+                timing["arrive_at"] = _iso_ts(arrive_dt)
+            result["timing"] = timing
+
         result["meta"] = self.meta(source="td")
         return result
 

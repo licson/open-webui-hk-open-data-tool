@@ -197,3 +197,83 @@ class TestTdDeparturesNearby:
     async def test_error_forwarded(self, seeded_tools, emitter):
         out = await seeded_tools.td_departures_nearby(__event_emitter__=emitter)
         assert out["error"] == "bad_request"
+
+
+class TestTdPlanTripTimeParams:
+    def _hk(self, *args):
+        from datetime import timedelta as _td, timezone as _tz
+        return datetime(*args, tzinfo=_tz(_td(hours=8)))
+
+    async def test_untimed_call_output_unchanged(self, seeded_tools, monkeypatch):
+        from test_trip_planner import geocode
+        geocode(monkeypatch, seeded_tools.landsd, (22.2799, 114.1501), (22.2921, 114.1500))
+        out = await seeded_tools.td_plan_trip("ORIGIN", "DEST")
+        assert "error" not in out
+        assert "timing" not in out
+        for i in out["itineraries"]:
+            assert "departure" not in i["summary"]
+            assert "arrival" not in i["summary"]
+            assert "arrival_status" not in i["summary"]
+
+    async def test_bad_time_short_circuits(self, seeded_tools, monkeypatch):
+        from test_trip_planner import geocode
+        geocode(monkeypatch, seeded_tools.landsd, (22.2799, 114.1501), (22.2921, 114.1500))
+        planner_calls = []
+
+        async def spy_plan(*a, **k):
+            planner_calls.append(a)
+            return {"error": "should_not_happen"}
+
+        monkeypatch.setattr(seeded_tools.planner, "plan", spy_plan)
+        out = await seeded_tools.td_plan_trip("ORIGIN", "DEST", start_at="not a time")
+        assert out["error"] == "bad_time"
+        assert out["param"] == "start_at"
+        assert planner_calls == [], "bad time must not call the planner"
+
+        out2 = await seeded_tools.td_plan_trip("ORIGIN", "DEST", arrive_at="oops")
+        assert out2["error"] == "bad_time"
+        assert out2["param"] == "arrive_at"
+        assert planner_calls == []
+
+    async def test_time_conflict_detail(self, seeded_tools, monkeypatch):
+        from test_trip_planner import geocode
+        geocode(monkeypatch, seeded_tools.landsd, (22.2799, 114.1501), (22.2921, 114.1500))
+        out = await seeded_tools.td_plan_trip(
+            "ORIGIN", "DEST",
+            start_at="2026-09-08T10:00", arrive_at="2026-09-08T09:00",
+        )
+        assert out["error"] == "time_conflict"
+        assert out["timing"]["start_at"] == "2026-09-08T10:00:00+08:00"
+
+    async def test_past_arrive_at_is_bad_time(self, seeded_tools, monkeypatch):
+        from test_trip_planner import geocode
+        geocode(monkeypatch, seeded_tools.landsd, (22.2799, 114.1501), (22.2921, 114.1500))
+        out = await seeded_tools.td_plan_trip("ORIGIN", "DEST", arrive_at="2020-01-01T00:00")
+        assert out["error"] == "bad_time"
+        assert out["param"] == "arrive_at"
+
+    async def test_depart_by_echoes_reference(self, seeded_tools, monkeypatch, freezer):
+        from test_trip_planner import geocode
+        geocode(monkeypatch, seeded_tools.landsd, (22.2799, 114.1501), (22.2921, 114.1500))
+        freezer.freeze(self._hk(2026, 9, 8, 6, 0))
+        out = await seeded_tools.td_plan_trip("ORIGIN", "DEST", start_at="07:00")
+        assert "error" not in out, out
+        assert out["timing"]["mode"] == "depart_by"
+        assert out["timing"]["start_at"] == "2026-09-08T07:00:00+08:00"
+        assert out["timing"]["timezone"] == "Asia/Hong_Kong"
+        for i in out["itineraries"]:
+            assert i["summary"]["departure"] == "2026-09-08T07:00:00+08:00"
+            assert "arrival" in i["summary"]
+            assert "arrival_status" not in i["summary"]
+
+    async def test_arrive_by_attaches_status(self, seeded_tools, monkeypatch, freezer):
+        from test_trip_planner import geocode
+        geocode(monkeypatch, seeded_tools.landsd, (22.2799, 114.1501), (22.2921, 114.1500))
+        freezer.freeze(self._hk(2026, 9, 8, 6, 0))
+        out = await seeded_tools.td_plan_trip("ORIGIN", "DEST", arrive_at="2026-09-08T12:00")
+        assert "error" not in out, out
+        assert out["timing"]["mode"] == "arrive_by"
+        assert out["timing"]["arrive_at"] == "2026-09-08T12:00:00+08:00"
+        for i in out["itineraries"]:
+            assert i["summary"]["arrival_status"] in ("at_target", "overrun")
+            assert "departure" in i["summary"] and "arrival" in i["summary"]

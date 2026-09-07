@@ -22,9 +22,9 @@
 
 ## 4. Tool layer
 
-- [ ] 4.1 Add `start_at`/`arrive_at` params to `td_plan_trip`: resolve via `_resolve_clock_time`, return `bad_time`/`time_conflict` without calling the planner, forward tz-aware datetimes to `plan()`, pass through `timing`-augmented results; update the docstring with accepted formats, enum-free examples (`"arrive_at": "18:30"`, `"start_at": "2026-09-08T07:00"`), and the estimates disclaimer (ferry legs schedule-checked; bus/MTR waits modeled)
-- [ ] 4.2 Extend `tests/test_tools_td.py`: valid params forwarded (timing echo + clock fields present), `bad_time` naming the offending param with no planner call, `time_conflict` detail, untimed call output unchanged
-- [ ] 4.3 Run suite; commit
+- [x] 4.1 Add `start_at`/`arrive_at` params to `td_plan_trip`: resolve via `_resolve_clock_time`, return `bad_time`/`time_conflict` without calling the planner, forward tz-aware datetimes to `plan()`, pass through `timing`-augmented results; update the docstring with accepted formats, enum-free examples (`"arrive_at": "18:30"`, `"start_at": "2026-09-08T07:00"`), and the estimates disclaimer (ferry legs schedule-checked; bus/MTR waits modeled)
+- [x] 4.2 Extend `tests/test_tools_td.py`: valid params forwarded (timing echo + clock fields present), `bad_time` naming the offending param with no planner call, `time_conflict` detail, untimed call output unchanged
+- [x] 4.3 Run suite; commit
 
 ## 5. Version bump and verification
 
