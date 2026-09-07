@@ -263,19 +263,19 @@ class TestPlan:
         assert out["itineraries"]
 
 
-def ferry_only_db() -> dict:
+def ferry_only_db(freq=None) -> dict:
     """Mini graph whose only S_A->S_D option is a freq-carrying ferry."""
     db = mini_db()
     db["routeList"] = {
-        "FERRY+o+d": helpers.route(
-            "FERRY+o+d",
+        "FT+1+o+d": helpers.route(
+            "FT+1+o+d",
             ["sunferry"],
             {"sunferry": ["S_A", "S_D"]},
             route_no="FT",
             orig_en="South",
             dest_en="North",
             bound={"sunferry": "O"},
-            freq={"127": {"0600": ["0800", 20]}},  # service window 06:00-08:00 daily
+            freq=freq if freq is not None else {"127": {"0600": ["0800", 20]}},  # service 06:00-08:00 daily
         ),
     }
     return db
@@ -343,3 +343,126 @@ class TestPlanTimeReference:
         out = await planner.plan("ORIGIN", "DEST", start_at=self.OUTSIDE, __event_emitter__=emitter)
         assert out["error"] == "no_route_found"
         assert calls == [], "no live-ETA attempt for a future off-schedule departure"
+
+
+# ------------------------------------------------------------------
+# Arrive-by / window reverse solve over the freq-carrying ferry graph
+# ------------------------------------------------------------------
+class TestPlanArrivalTarget:
+    # Ferry service window 06:00-08:00 daily.
+    FROZEN = datetime(2026, 9, 6, 6, 0, tzinfo=HK)     # Sun 06:00 HKT
+
+    def _time_tools(self, mod, tmp_cache, freq=None):
+        valves = helpers.make_valves(mod, tmp_cache)
+        tdb = helpers.build_transit(mod, ferry_only_db(freq))
+        landsd = mod.LandsDClient(tdb.http)
+        return mod.TripPlanner(tdb, landsd, valves)
+
+    def _geocode(self, monkeypatch, planner):
+        async def fake_location_search(q, limit=10):
+            pt = NEAR_S_A if "ORIGIN" in q.upper() else NEAR_S_D
+            return [{"wgs84": {"lat": pt[0], "lon": pt[1]}}]
+
+        monkeypatch.setattr(planner.landsd, "location_search", fake_location_search)
+
+    def _no_eras(self, monkeypatch, planner):
+        async def fake_departures(*a, **k):
+            return []
+
+        monkeypatch.setattr(planner.transit, "leg_next_departures", fake_departures)
+
+    def plan(self, planner, **kw):
+        return planner.plan("ORIGIN", "DEST", **kw)
+
+    async def test_time_conflict(self, mod, tmp_cache, monkeypatch, freezer):
+        planner = self._time_tools(mod, tmp_cache)
+        self._geocode(monkeypatch, planner)
+        self._no_eras(monkeypatch, planner)
+        freezer.freeze(self.FROZEN)
+        # arrive earlier than the earliest possible departure (now)
+        out = await self.plan(planner, start_at=self.FROZEN + timedelta(hours=1), arrive_at=self.FROZEN + timedelta(minutes=30))
+        assert out["error"] == "time_conflict"
+
+    async def test_derived_departure_lands_inside_target(self, mod, tmp_cache, monkeypatch, freezer, emitter):
+        planner = self._time_tools(mod, tmp_cache)
+        self._geocode(monkeypatch, planner)
+        self._no_eras(monkeypatch, planner)
+        freezer.freeze(self.FROZEN)
+        # ferry ~47 min modeled ride (30 min wait + fixed). arrive in 1h45.
+        arrive = self.FROZEN + timedelta(minutes=105)
+        out = await self.plan(planner, arrive_at=arrive, __event_emitter__=emitter)
+        assert "error" not in out
+        i = out["itineraries"][0]
+        assert i["summary"]["arrival_status"] == "at_target"
+        dep = datetime.fromisoformat(i["summary"]["departure"])
+        arr = datetime.fromisoformat(i["summary"]["arrival"])
+        assert arr <= arrive, "modeled arrival must meet the target"
+
+    async def test_wide_window_delays_departure_toward_target(self, mod, tmp_cache, monkeypatch, freezer):
+        planner = self._time_tools(mod, tmp_cache)
+        self._geocode(monkeypatch, planner)
+        self._no_eras(monkeypatch, planner)
+        freezer.freeze(self.FROZEN)
+        start = self.FROZEN + timedelta(hours=1)  # 07:00, inside ferry window
+        arrive = self.FROZEN + timedelta(hours=2)  # 08:00; trip ~42 min
+        out = await self.plan(planner, start_at=start, arrive_at=arrive)
+        assert "error" not in out
+        i = out["itineraries"][0]
+        dep = datetime.fromisoformat(i["summary"]["departure"])
+        assert dep > start, "a wide window should delay the departure past start_at"
+        assert i["summary"]["arrival_status"] == "at_target"
+        arr = datetime.fromisoformat(i["summary"]["arrival"])
+        assert arr <= arrive, "arrival must stay inside the target"
+
+    async def test_tight_window_departs_at_start_at(self, mod, tmp_cache, monkeypatch, freezer):
+        # Trip ~42 min fills the 40-min window: departs right at start_at and is
+        # flagged overrun, not an error.
+        planner = self._time_tools(mod, tmp_cache)
+        self._geocode(monkeypatch, planner)
+        self._no_eras(monkeypatch, planner)
+        freezer.freeze(self.FROZEN)
+        start = self.FROZEN + timedelta(hours=1)   # 07:00
+        arrive = self.FROZEN + timedelta(hours=1, minutes=40)  # 07:40
+        out = await self.plan(planner, start_at=start, arrive_at=arrive)
+        assert "error" not in out
+        i = out["itineraries"][0]
+        dep = datetime.fromisoformat(i["summary"]["departure"])
+        assert dep == start
+        assert i["summary"]["arrival_status"] == "overrun"
+
+    async def test_tight_window_is_overrun_not_error(self, mod, tmp_cache, monkeypatch, freezer):
+        planner = self._time_tools(mod, tmp_cache)
+        self._geocode(monkeypatch, planner)
+        self._no_eras(monkeypatch, planner)
+        freezer.freeze(self.FROZEN)
+        arrive = self.FROZEN + timedelta(minutes=10)  # tighter than even the modeled ride
+        out = await self.plan(planner, arrive_at=arrive)
+        assert "error" not in out, "tight windows are best-effort, not an error"
+        assert all(i["summary"]["arrival_status"] == "overrun" for i in out["itineraries"])
+
+    async def test_off_schedule_derived_departure_retries_earlier(self, mod, tmp_cache, monkeypatch, freezer):
+        # Derived departure (~07:45) is outside the 06:00-07:20 window, but 30
+        # minutes earlier (~07:15) is in service -> the solve must step back.
+        planner = self._time_tools(mod, tmp_cache, freq={"127": {"0600": ["0720", 20]}})
+        self._geocode(monkeypatch, planner)
+        self._no_eras(monkeypatch, planner)
+        freezer.freeze(self.FROZEN)
+        arrive = self.FROZEN + timedelta(hours=2, minutes=32)  # 08:32 -> dep ~07:45
+        out = await self.plan(planner, arrive_at=arrive)
+        assert "error" not in out
+        i = out["itineraries"][0]
+        dep = datetime.fromisoformat(i["summary"]["departure"])
+        assert dep < self.FROZEN + timedelta(hours=1, minutes=30), "solve should retry earlier"
+        assert i["summary"]["arrival_status"] == "at_target"
+        assert out["diagnostics"]["departure_solve_passes"] >= 2, "expected a retry pass"
+
+    async def test_off_schedule_at_both_candidates_drops_goal(self, mod, tmp_cache, monkeypatch, freezer):
+        # Neither the derived departure (~07:13) nor 30 min earlier is in the
+        # 12:00-14:00 window -> the goal is dropped and no route is returned.
+        planner = self._time_tools(mod, tmp_cache, freq={"127": {"1200": ["1400", 20]}})  # far window
+        self._geocode(monkeypatch, planner)
+        self._no_eras(monkeypatch, planner)
+        freezer.freeze(self.FROZEN)
+        arrive = self.FROZEN + timedelta(hours=2)
+        out = await self.plan(planner, arrive_at=arrive)
+        assert out["error"] == "no_route_found"

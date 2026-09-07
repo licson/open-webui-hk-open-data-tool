@@ -15,10 +15,10 @@
 
 ## 3. Arrival-target solve and timing output
 
-- [ ] 3.1 Implement the per-itinerary departure derivation in `plan()`: `max(earliest_ref, arrive_at - plan_arrival_buffer_min - duration)`, offline freq re-check at the derived departure, one retry 30 min earlier bounded by `earliest_ref`, drop on second failure; count passes in `diagnostics.departure_solve_passes`
-- [ ] 3.2 Add `{"error": "time_conflict"}` when `earliest_ref >= arrive_at`; add `summary.departure`/`summary.arrival` (ISO-8601 +08:00) and `arrival_status` (`at_target`/`overrun`) when a reference/target is in play; add the top-level `timing` echo (`mode`, resolved times, timezone); verify untimed calls produce byte-identical output shape
-- [ ] 3.3 Add planner tests for arrive-by and window modes on a seeded freq-carrying (ferry-shaped) route: derived departure lands inside target, wide window departs at `start_at`, tight window → `overrun` (not an error), off-schedule shift-earlier and drop cases, `time_conflict`
-- [ ] 3.4 Run suite; commit
+- [x] 3.1 Implement the per-itinerary departure derivation in `plan()`: `max(earliest_ref, arrive_at - plan_arrival_buffer_min - duration)`, offline freq re-check at the derived departure, one retry 30 min earlier bounded by `earliest_ref`, drop on second failure; count passes in `diagnostics.departure_solve_passes`
+- [x] 3.2 Add `{"error": "time_conflict"}` when `earliest_ref >= arrive_at`; add `summary.departure`/`summary.arrival` (ISO-8601 +08:00) and `arrival_status` (`at_target`/`overrun`) when a reference/target is in play; add the top-level `timing` echo (`mode`, resolved times, timezone); verify untimed calls produce byte-identical output shape
+- [x] 3.3 Add planner tests for arrive-by and window modes on a seeded freq-carrying (ferry-shaped) route: derived departure lands inside target, wide window departs at `start_at`, tight window → `overrun` (not an error), off-schedule shift-earlier and drop cases, `time_conflict`
+- [x] 3.4 Run suite; commit
 
 ## 4. Tool layer
 

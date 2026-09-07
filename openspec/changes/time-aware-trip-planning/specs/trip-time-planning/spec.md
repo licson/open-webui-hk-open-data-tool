@@ -49,9 +49,13 @@ When `arrive_at` is supplied (alone or with `start_at`), the planner SHALL deriv
 - **WHEN** the fastest itinerary duration is 40 minutes and `arrive_at` is 18:30
 - **THEN** its derived departure is 17:45 (18:30 minus the 5-minute buffer) and `arrival_status` is `at_target`
 
-#### Scenario: Wide window departs at start_at
-- **WHEN** both `start_at` and `arrive_at` are given and the duration is much shorter than the window
-- **THEN** the derived departure equals `start_at` and arrival is well before `arrive_at`
+#### Scenario: Wide window delays the departure toward the target
+- **WHEN** both `start_at` and `arrive_at` are given and the trip duration is much shorter than the window
+- **THEN** the derived departure is later than `start_at` and arrival lands just ahead of `arrive_at` (after the buffer), so the traveller does not arrive unnecessarily early
+
+#### Scenario: Tight window departs at start_at
+- **WHEN** the trip duration nearly fills the window (arrive-by derivation would fall before `start_at`)
+- **THEN** the derived departure equals `start_at` and can be reported as `overrun` if the modeled arrival still exceeds `arrive_at`
 
 #### Scenario: Tight window is flagged, not failed
 - **WHEN** every itinerary's derived arrival exceeds `arrive_at`

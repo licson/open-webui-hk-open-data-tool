@@ -2731,14 +2731,14 @@ class TripPlanner:
         max_expansions = int(getattr(self.valves, "plan_max_expansions", self.MAX_EXPANSIONS))
         deadline = now_s() + float(getattr(self.valves, "plan_max_runtime_s", 20.0))
 
-        async def _leg_active(L: dict, proj_dt: datetime, allow_live_eta: bool) -> bool:
+        async def _leg_active(L: dict, proj_dt: datetime, future_check: bool) -> bool:
             co = norm_co(L["company"])
             rid = L["route_id"]
             bid = L["board_stop_id"]
-            # Mode-dependent coverage: leave-now (near-now reference) keeps the
-            # legacy bus-only schedule check; future references consult the freq
-            # data of ANY carrier (ferries are the ones with real schedules).
-            if near_now_ref:
+            # Coverage gate: leave-now keeps the legacy bus-only schedule check;
+            # future departures consult the freq data of ANY carrier (ferries
+            # are the ones with real schedules).
+            if not future_check:
                 if co not in ("kmb", "ctb", "nlb", "gmb"):
                     return True
             else:
@@ -2746,7 +2746,7 @@ class TripPlanner:
                     return True
             proj_mins = L.get("board_time_minutes", 0.0)
             bucket = int((proj_dt.replace(second=0, microsecond=0)).timestamp() // 1800)
-            cache_key = (co, rid, bid, bucket, near_now_ref)
+            cache_key = (co, rid, bid, bucket, future_check)
             if cache_key in eta_validity_cache:
                 return eta_validity_cache[cache_key]
             r = self.transit._route_list.get(rid, {})
@@ -2763,12 +2763,13 @@ class TripPlanner:
             if is_scheduled_now:
                 eta_validity_cache[cache_key] = True
                 return True
-            if not allow_live_eta:
-                # Future references: a now-based live ETA says nothing about a
-                # future departure, so there is no rescue - reject outright.
+            if future_check:
+                # A now-based live ETA says nothing about a future departure -
+                # no rescue, reject outright.
                 eta_validity_cache[cache_key] = False
                 return False
-            # Outside the scheduled window: rescue with a live ETA before rejecting.
+            # Outside the scheduled window for a departure happening now:
+            # rescue with a live ETA before rejecting.
             board_seq = L.get("board_seq")
             if board_seq is None:
                 idxmap = self.transit._route_company_stop_index.get((rid, co), {})
@@ -2780,7 +2781,7 @@ class TripPlanner:
 
         async def is_leg_active(L: dict) -> bool:
             proj_dt = ref + timedelta(minutes=L.get("board_time_minutes", 0.0))
-            return await _leg_active(L, proj_dt, allow_live_eta=near_now_ref)
+            return await _leg_active(L, proj_dt, future_check=not near_now_ref)
 
         async def is_candidate_valid(legs: list) -> bool:
             for L in legs:
@@ -2913,11 +2914,18 @@ class TripPlanner:
         # search's wall-clock budget.
         best_goals.sort(key=lambda g: g["perceived_cost"])
         validated = []
-        for g in best_goals[:80]:
-            if len(validated) >= 30:
-                break
-            if await is_candidate_valid(g["legs"]):
-                validated.append(g)
+        if arrive_at is not None:
+            # Arrival-target modes: schedule validity is decided per-goal at the
+            # derived departure in the reverse solve below, not against the
+            # reference clock here (departing later can put a leg back in
+            # service). Keep the raw candidate set.
+            validated = best_goals[:80]
+        else:
+            for g in best_goals[:80]:
+                if len(validated) >= 30:
+                    break
+                if await is_candidate_valid(g["legs"]):
+                    validated.append(g)
 
         diagnostics = {
             "expansions": expansions,
@@ -2932,6 +2940,48 @@ class TripPlanner:
             if __event_emitter__:
                 await __event_emitter__({"type": "status", "data": {"description": "Could not find a feasible route.", "done": True}})
             return {"error": "no_route_found", "detail": "Could not find a feasible route.", "diagnostics": diagnostics}
+
+        # ---- Arrive-by / window: derive a per-itinerary departure. ----
+        # The search is time-agnostic (only validation is clock-dependent), so a
+        # single A* pass suffices; each goal's departure is derived from the
+        # arrival target, then every leg is re-checked against its freq schedule
+        # at the derived departure (pure CPU; no live-ETA rescue for future
+        # departures), with one retry 30 minutes earlier bounded by earliest_ref.
+        if arrive_at is not None:
+            buffer_min = float(getattr(self.valves, "plan_arrival_buffer_min", 5))
+            departure_solve_passes = 0
+            solved = []
+            for g in best_goals[:80]:
+                duration = g["actual_time"]
+                dep_i = max(earliest_ref, arrive_at - timedelta(minutes=buffer_min + duration))
+                attempt = dep_i
+                ok = False
+                for _pass in range(2):  # one 30-min-earlier retry at most
+                    departure_solve_passes += 1
+                    dep_future = (attempt - now_hk).total_seconds() > 120.0
+                    valid = True
+                    for L in g["legs"]:
+                        proj_dt = attempt + timedelta(minutes=L.get("board_time_minutes", 0.0))
+                        if not await _leg_active(L, proj_dt, future_check=dep_future):
+                            valid = False
+                            break
+                    if valid:
+                        ok = True
+                        break
+                    if attempt - timedelta(minutes=30) < earliest_ref:
+                        break
+                    attempt = attempt - timedelta(minutes=30)
+                if ok:
+                    g["_dep"] = attempt
+                    solved.append(g)
+            best_goals = solved
+            diagnostics["goals_valid"] = len(best_goals)
+            diagnostics["departure_solve_passes"] = departure_solve_passes
+
+        if not best_goals:
+            if __event_emitter__:
+                await __event_emitter__({"type": "status", "data": {"description": "Could not find a route that meets the arrival target.", "done": True}})
+            return {"error": "no_route_found", "detail": "No itinerary could meet the arrival target after checking frequency schedules.", "diagnostics": diagnostics}
 
         champion_fastest = min(best_goals, key=lambda x: x["actual_time"])
         champion_direct = min(best_goals, key=lambda x: (x["transfers"], x["actual_time"]))
@@ -2966,6 +3016,7 @@ class TripPlanner:
         for g in unique_plans:
             formatted_legs = []
             g.pop("_sig", None)
+            dep_clock = g.pop("_dep", None)
             first_leg = g["legs"][0]
             first_co = norm_co(first_leg["company"])
             first_seq = self.transit._route_company_stop_index.get((first_leg["route_id"], first_co), {}).get(first_leg["board_stop_id"], 0)
@@ -2984,7 +3035,17 @@ class TripPlanner:
                 b = self.transit.stop_lite(L["board_stop_id"])
                 a = self.transit.stop_lite(L["alight_stop_id"])
                 formatted_legs.append({"mode": mode_of_company(L["company"]), "operator": L["company"], "route": rlt, "board_stop": b, "alight_stop": a, "next_departures": live_etas if (L == first_leg and live_etas) else []})
-            itineraries.append({"tags": g["tags"], "score": round(g["perceived_cost"], 2), "summary": {"transfers": g["transfers"], "walk_m": round(g["walk_m"], 1), "time_min_est": round(g["actual_time"], 1)}, "legs": formatted_legs})
+            summary = {"transfers": g["transfers"], "walk_m": round(g["walk_m"], 1), "time_min_est": round(g["actual_time"], 1)}
+            # Clock fields are present only when a time reference was supplied.
+            if arrive_at is not None:
+                arrival = dep_clock + timedelta(minutes=g["actual_time"])
+                summary["departure"] = _iso_ts(dep_clock)
+                summary["arrival"] = _iso_ts(arrival)
+                summary["arrival_status"] = "at_target" if arrival <= arrive_at else "overrun"
+            elif start_at is not None:
+                summary["departure"] = _iso_ts(ref)
+                summary["arrival"] = _iso_ts(ref + timedelta(minutes=g["actual_time"]))
+            itineraries.append({"tags": g["tags"], "score": round(g["perceived_cost"], 2), "summary": summary, "legs": formatted_legs})
 
         itineraries.sort(key=lambda x: x["summary"]["time_min_est"])
 
