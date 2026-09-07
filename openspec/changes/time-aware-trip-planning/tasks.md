@@ -28,6 +28,6 @@
 
 ## 5. Version bump and verification
 
-- [ ] 5.1 Bump `0.6.0` → `0.7.0` at all three sync spots (manifest line ~9, User-Agent in `HTTPClient._get_client`, `Tools.meta()`) — the version-sync test enforces all three
-- [ ] 5.2 Full verification: `python3 -m py_compile hk-open-data-tool.py` and `python3 -m pytest` green (offline suite, live set deselected); commit
-- [ ] 5.3 Validate the change (`openspec validate --change time-aware-trip-planning` if available) and update this task list as completed
+- [x] 5.1 Bump `0.6.0` → `0.7.0` at all three sync spots (manifest line ~9, User-Agent in `HTTPClient._get_client`, `Tools.meta()`) — the version-sync test enforces all three
+- [x] 5.2 Full verification: `python3 -m py_compile hk-open-data-tool.py` and `python3 -m pytest` green (offline suite, live set deselected); commit
+- [x] 5.3 Validate the change (`openspec validate --change time-aware-trip-planning` if available) and update this task list as completed
