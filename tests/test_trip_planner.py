@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from conftest import mini_db
+from conftest import mini_db, helpers
 
 HK = timezone(timedelta(hours=8))
 
@@ -261,3 +261,85 @@ class TestPlan:
         assert "error" not in out
         assert out["meta"]["data_source"] == "hkbus DB + Transport Department APIs"
         assert out["itineraries"]
+
+
+def ferry_only_db() -> dict:
+    """Mini graph whose only S_A->S_D option is a freq-carrying ferry."""
+    db = mini_db()
+    db["routeList"] = {
+        "FERRY+o+d": helpers.route(
+            "FERRY+o+d",
+            ["sunferry"],
+            {"sunferry": ["S_A", "S_D"]},
+            route_no="FT",
+            orig_en="South",
+            dest_en="North",
+            bound={"sunferry": "O"},
+            freq={"127": {"0600": ["0800", 20]}},  # service window 06:00-08:00 daily
+        ),
+    }
+    return db
+
+
+class TestPlanTimeReference:
+    FROZEN = datetime(2026, 9, 6, 6, 0, tzinfo=HK)  # Sun 06:00 HKT
+    IN_WINDOW = datetime(2026, 9, 6, 7, 0, tzinfo=HK)   # ferry service 06:00-08:00
+    OUTSIDE = datetime(2026, 9, 6, 20, 0, tzinfo=HK)    # outside ferry service
+
+    def _time_tools(self, mod, tmp_cache):
+        valves = helpers.make_valves(mod, tmp_cache)
+        tdb = helpers.build_transit(mod, ferry_only_db())
+        landsd = mod.LandsDClient(tdb.http)
+        return mod.TripPlanner(tdb, landsd, valves)
+
+    def _geocode(self, monkeypatch, planner):
+        async def fake_location_search(q, limit=10):
+            pt = NEAR_S_A if "ORIGIN" in q.upper() else NEAR_S_D
+            return [{"wgs84": {"lat": pt[0], "lon": pt[1]}}]
+
+        monkeypatch.setattr(planner.landsd, "location_search", fake_location_search)
+
+    def _no_eras(self, monkeypatch, planner):
+        calls = []
+
+        async def fake_departures(*a, **k):
+            calls.append(a)
+            return []
+
+        monkeypatch.setattr(planner.transit, "leg_next_departures", fake_departures)
+        return calls
+
+    async def test_leave_now_ignores_freq_for_ferry(self, mod, tmp_cache, monkeypatch, emitter, freezer):
+        # Legacy leave-now: ferry legs are NOT schedule-checked, so a plan is
+        # found even with the clock (frozen inside the service window) would
+        # otherwise matter; and a near-now departure DOES fetch a live ETA.
+        planner = self._time_tools(mod, tmp_cache)
+        self._geocode(monkeypatch, planner)
+        calls = self._no_eras(monkeypatch, planner)
+        freezer.freeze(self.FROZEN)
+        out = await planner.plan("ORIGIN", "DEST", __event_emitter__=emitter)
+        assert "error" not in out
+        assert any(i["legs"][0]["operator"] == "sunferry" for i in out["itineraries"])
+
+    async def test_future_start_skips_live_eta_and_anchors_validation(self, mod, tmp_cache, monkeypatch, emitter, freezer):
+        # A future start_at: (a) must not call the live ETA API, (b) anchors
+        # freq validation at the reference clock (07:00 is inside the window).
+        planner = self._time_tools(mod, tmp_cache)
+        self._geocode(monkeypatch, planner)
+        calls = self._no_eras(monkeypatch, planner)
+        freezer.freeze(self.FROZEN)
+        out = await planner.plan("ORIGIN", "DEST", start_at=self.IN_WINDOW, __event_emitter__=emitter)
+        assert "error" not in out
+        assert calls == [], "future reference must not fetch live ETAs"
+        for i in out["itineraries"]:
+            for leg in i["legs"]:
+                assert leg["next_departures"] == []
+
+    async def test_future_start_outside_window_drops_ferry(self, mod, tmp_cache, monkeypatch, emitter, freezer):
+        planner = self._time_tools(mod, tmp_cache)
+        self._geocode(monkeypatch, planner)
+        calls = self._no_eras(monkeypatch, planner)
+        freezer.freeze(self.FROZEN)
+        out = await planner.plan("ORIGIN", "DEST", start_at=self.OUTSIDE, __event_emitter__=emitter)
+        assert out["error"] == "no_route_found"
+        assert calls == [], "no live-ETA attempt for a future off-schedule departure"

@@ -7,11 +7,11 @@
 
 ## 2. Planner reference anchoring
 
-- [ ] 2.1 Extend `TripPlanner.plan` with tz-aware `start_at`/`arrive_at` params; compute the reference clock (`start_at` or now) and project `is_leg_active` schedule checks from `reference + board_time_minutes` (replaces `datetime.now(HK_TZ)` at hk-open-data-tool.py:2682)
-- [ ] 2.2 Make validation policy reference-conditional: ≈ now keeps the current bus-company policy with live-ETA rescue; future reference checks frequency-carrying legs of any company at projected board times with no rescue
-- [ ] 2.3 Make the first-leg live-ETA substitution (hk-open-data-tool.py:2887–2891) conditional on that itinerary's effective departure being ≈ now (≤ 2 min); future departures keep the modeled wait and empty `next_departures`
-- [ ] 2.4 Add planner tests: frozen clock + future `start_at` (no ETA fetch, anchored validation), leave-now path unchanged
-- [ ] 2.5 Run suite; commit
+- [x] 2.1 Extend `TripPlanner.plan` with tz-aware `start_at`/`arrive_at` params; compute the reference clock (`start_at` or now) and project `is_leg_active` schedule checks from `reference + board_time_minutes` (replaces `datetime.now(HK_TZ)` at hk-open-data-tool.py:2682)
+- [x] 2.2 Make validation policy reference-conditional: ≈ now keeps the current bus-company policy with live-ETA rescue; future reference checks frequency-carrying legs of any company at projected board times with no rescue
+- [x] 2.3 Make the first-leg live-ETA substitution (hk-open-data-tool.py:2887–2891) conditional on that itinerary's effective departure being ≈ now (≤ 2 min); future departures keep the modeled wait and empty `next_departures`
+- [x] 2.4 Add planner tests: frozen clock + future `start_at` (no ETA fetch, anchored validation), leave-now path unchanged
+- [x] 2.5 Run suite; commit
 
 ## 3. Arrival-target solve and timing output
 

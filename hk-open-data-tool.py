@@ -435,6 +435,11 @@ def _resolve_clock_time(value, *, future_only: bool, now_hk: datetime) -> Option
     return cand
 
 
+def _iso_ts(dt: datetime) -> str:
+    """Render a tz-aware datetime as an ISO-8601 Hong Kong (+08:00) string."""
+    return dt.astimezone(HK_TZ).isoformat(timespec="seconds")
+
+
 def strip_html(html: str) -> str:
     """Remove HTML tags from a string."""
     if not html or not isinstance(html, str):
@@ -2596,6 +2601,8 @@ class TripPlanner:
         preferences: Optional[dict] = None,
         lang: Literal["en", "tc", "sc"] = "en",
         __event_emitter__: Optional[Any] = None,
+        start_at: Optional[datetime] = None,
+        arrive_at: Optional[datetime] = None,
     ) -> dict:
         import heapq
         preferences = preferences or {}
@@ -2604,6 +2611,26 @@ class TripPlanner:
         if max_transfers is None:
             max_transfers = int(getattr(self.valves, "plan_default_max_transfers", 6))
         max_transfers = max(0, min(int(max_transfers), transfers_cap))
+
+        # Reference clock for scheduling/validation. Leave-now (no start_at)
+        # reproduces today's behavior exactly; a supplied start_at anchors all
+        # schedule projections. now_hk is captured once for the whole plan.
+        now_hk = datetime.now(HK_TZ)
+        ref = start_at if start_at is not None else now_hk
+        earliest_ref = max(now_hk, ref)
+        if start_at is not None:
+            ref = earliest_ref
+        # True when the caller gave no time reference at all (legacy output shape).
+        untimed = start_at is None and arrive_at is None
+        # Whether live (now-based) ETAs are meaningful for the reference.
+        near_now_ref = (ref - now_hk).total_seconds() <= 120.0
+
+        if earliest_ref is not None and arrive_at is not None and earliest_ref >= arrive_at:
+            return {
+                "error": "time_conflict",
+                "detail": "The earliest departure time is at or after the requested arrival time.",
+                "timing_times": {"start_at": _iso_ts(earliest_ref), "arrive_at": _iso_ts(arrive_at)},
+            }
 
         if __event_emitter__:
             await __event_emitter__({"type": "status", "data": {"description": "Resolving locations…", "done": False}})
@@ -2704,14 +2731,22 @@ class TripPlanner:
         max_expansions = int(getattr(self.valves, "plan_max_expansions", self.MAX_EXPANSIONS))
         deadline = now_s() + float(getattr(self.valves, "plan_max_runtime_s", 20.0))
 
-        async def is_leg_active(L: dict) -> bool:
+        async def _leg_active(L: dict, proj_dt: datetime, allow_live_eta: bool) -> bool:
             co = norm_co(L["company"])
-            if co not in ("kmb", "ctb", "nlb", "gmb"):
-                return True
             rid = L["route_id"]
             bid = L["board_stop_id"]
+            # Mode-dependent coverage: leave-now (near-now reference) keeps the
+            # legacy bus-only schedule check; future references consult the freq
+            # data of ANY carrier (ferries are the ones with real schedules).
+            if near_now_ref:
+                if co not in ("kmb", "ctb", "nlb", "gmb"):
+                    return True
+            else:
+                if not (self.transit._route_list.get(rid, {}) or {}).get("freq"):
+                    return True
             proj_mins = L.get("board_time_minutes", 0.0)
-            cache_key = (co, rid, bid, int(proj_mins // 30))
+            bucket = int((proj_dt.replace(second=0, microsecond=0)).timestamp() // 1800)
+            cache_key = (co, rid, bid, bucket, near_now_ref)
             if cache_key in eta_validity_cache:
                 return eta_validity_cache[cache_key]
             r = self.transit._route_list.get(rid, {})
@@ -2721,14 +2756,18 @@ class TripPlanner:
                 return True
             freq_data = r.get("freq")
             is_scheduled_now = True
-            projected_dt = datetime.now(HK_TZ) + timedelta(minutes=proj_mins)
             if freq_data:
                 bounds = r.get("bound", {}) if isinstance(r.get("bound"), dict) else {}
                 bound = str(bounds.get(co, bounds.get(co.lower(), "")) or "")
-                is_scheduled_now = self.is_operating_now(freq_data, bound, projected_dt)
+                is_scheduled_now = self.is_operating_now(freq_data, bound, proj_dt)
             if is_scheduled_now:
                 eta_validity_cache[cache_key] = True
                 return True
+            if not allow_live_eta:
+                # Future references: a now-based live ETA says nothing about a
+                # future departure, so there is no rescue - reject outright.
+                eta_validity_cache[cache_key] = False
+                return False
             # Outside the scheduled window: rescue with a live ETA before rejecting.
             board_seq = L.get("board_seq")
             if board_seq is None:
@@ -2738,6 +2777,10 @@ class TripPlanner:
             has_live_eta = any(e.get("eta", {}).get("minutes") is not None for e in (etas or []))
             eta_validity_cache[cache_key] = has_live_eta
             return has_live_eta
+
+        async def is_leg_active(L: dict) -> bool:
+            proj_dt = ref + timedelta(minutes=L.get("board_time_minutes", 0.0))
+            return await _leg_active(L, proj_dt, allow_live_eta=near_now_ref)
 
         async def is_candidate_valid(legs: list) -> bool:
             for L in legs:
@@ -2926,16 +2969,21 @@ class TripPlanner:
             first_leg = g["legs"][0]
             first_co = norm_co(first_leg["company"])
             first_seq = self.transit._route_company_stop_index.get((first_leg["route_id"], first_co), {}).get(first_leg["board_stop_id"], 0)
-            live_etas = await self.transit.leg_next_departures(first_leg["company"], first_leg["route_id"], first_leg["board_stop_id"], first_seq, limit_etas=1, lang=lang)
-            live_wait = live_etas[0].get("eta", {}).get("minutes") if live_etas else None
-            if live_wait is not None:
-                modeled_wait, _ = self.mode_times(first_co, 0)
-                g["actual_time"] = max(g["actual_time"] - modeled_wait + float(live_wait), 1.0)
+            # Live ETAs only make sense for a departure happening now; a future
+            # reference must keep the modeled wait (a now-ETA next to a 07:00
+            # departure would mislead).
+            live_etas = []
+            if near_now_ref:
+                live_etas = await self.transit.leg_next_departures(first_leg["company"], first_leg["route_id"], first_leg["board_stop_id"], first_seq, limit_etas=1, lang=lang)
+                live_wait = live_etas[0].get("eta", {}).get("minutes") if live_etas else None
+                if live_wait is not None:
+                    modeled_wait, _ = self.mode_times(first_co, 0)
+                    g["actual_time"] = max(g["actual_time"] - modeled_wait + float(live_wait), 1.0)
             for L in g["legs"]:
                 rlt = self.transit.route_lite(L["route_id"])
                 b = self.transit.stop_lite(L["board_stop_id"])
                 a = self.transit.stop_lite(L["alight_stop_id"])
-                formatted_legs.append({"mode": mode_of_company(L["company"]), "operator": L["company"], "route": rlt, "board_stop": b, "alight_stop": a, "next_departures": live_etas if L == first_leg else []})
+                formatted_legs.append({"mode": mode_of_company(L["company"]), "operator": L["company"], "route": rlt, "board_stop": b, "alight_stop": a, "next_departures": live_etas if (L == first_leg and live_etas) else []})
             itineraries.append({"tags": g["tags"], "score": round(g["perceived_cost"], 2), "summary": {"transfers": g["transfers"], "walk_m": round(g["walk_m"], 1), "time_min_est": round(g["actual_time"], 1)}, "legs": formatted_legs})
 
         itineraries.sort(key=lambda x: x["summary"]["time_min_est"])
