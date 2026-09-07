@@ -6,7 +6,7 @@ git_url: https://github.com/licson/open-webui-hk-open-data-tool
 description: LLM-safe HK open-data tool (HKO, LandsD, TD). Transit supports bus/minibus + MTR (rail/LRT/MTR bus) + ferries; curated trip planning; no dump endpoints.
 required_open_webui_version: 0.5.0
 requirements: httpx,pydantic
-version: 0.6.0
+version: 0.7.0
 licence: MIT
 """
 
@@ -1366,7 +1366,7 @@ class HTTPClient:
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            headers = {"User-Agent": "HongKongOpenDataTool/0.6.0"}
+            headers = {"User-Agent": "HongKongOpenDataTool/0.7.0"}
             self._client = httpx.AsyncClient(
                 timeout=self.valves.http_timeout_s, headers=headers
             )
@@ -3092,7 +3092,7 @@ class Tools:
         self.als = ALSClient(self.http)
 
     def meta(self, source: Optional[str] = None) -> dict:
-        base = {"tool": "Hong Kong Open Data", "version": "0.6.0", "ts": int(now_s())}
+        base = {"tool": "Hong Kong Open Data", "version": "0.7.0", "ts": int(now_s())}
         if source == "td":
             return {**base, "data_source": "hkbus DB + Transport Department APIs", **self.transit.meta()}
         return base
