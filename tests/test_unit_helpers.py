@@ -199,6 +199,46 @@ class TestEtaMinutesFromHhmm:
         assert mod.eta_minutes_from_hhmm(self.NOW, raw) is None
 
 
+class TestResolveClockTime:
+    NOW = datetime(2026, 9, 5, 17, 0, tzinfo=HK_TZ)  # Sat 17:00 HKT
+
+    def resolve(self, mod, value, *, future_only=False, now=None):
+        return mod._resolve_clock_time(value, future_only=future_only, now_hk=now or self.NOW)
+
+    def test_naive_iso_assumed_hk(self, mod):
+        assert self.resolve(mod, "2026-09-08T07:00") == datetime(2026, 9, 8, 7, 0, tzinfo=HK_TZ)
+
+    def test_offset_rebased_to_hk(self, mod):
+        # 04:00Z = 12:00 HKT
+        assert self.resolve(mod, "2026-09-05T04:00:00Z") == datetime(2026, 9, 5, 12, 0, tzinfo=HK_TZ)
+        assert self.resolve(mod, "2026-09-05T20:00:00+08:00") == datetime(2026, 9, 5, 20, 0, tzinfo=HK_TZ)
+
+    def test_bare_clock_later_today(self, mod):
+        assert self.resolve(mod, "18:30") == datetime(2026, 9, 5, 18, 30, tzinfo=HK_TZ)
+
+    def test_bare_clock_now_is_kept(self, mod):
+        assert self.resolve(mod, "17:00") == datetime(2026, 9, 5, 17, 0, tzinfo=HK_TZ)
+
+    def test_bare_clock_past_rolls_to_tomorrow(self, mod):
+        assert self.resolve(mod, "16:59") == datetime(2026, 9, 6, 16, 59, tzinfo=HK_TZ)
+
+    def test_bare_clock_with_seconds(self, mod):
+        assert self.resolve(mod, "18:30:15") == datetime(2026, 9, 5, 18, 30, 15, tzinfo=HK_TZ)
+
+    @pytest.mark.parametrize("raw", [None, "", "next tuesday", "9:5", "25:00", "12:99", "abc", 18, 30.0])
+    def test_invalid(self, mod, raw):
+        assert self.resolve(mod, raw) is None
+
+    def test_future_only_clamps_past_to_now(self, mod):
+        # start_at before now clamps to the reference instant
+        assert self.resolve(mod, "2026-09-05T10:00", future_only=True) == datetime(2026, 9, 5, 17, 0, tzinfo=HK_TZ)
+        # but an earlier bare clock rolls forward (still future), not clamped
+        assert self.resolve(mod, "16:59", future_only=True) == datetime(2026, 9, 6, 16, 59, tzinfo=HK_TZ)
+
+    def test_future_only_keeps_future_untouched(self, mod):
+        assert self.resolve(mod, "2026-09-08T07:00", future_only=True) == datetime(2026, 9, 8, 7, 0, tzinfo=HK_TZ)
+
+
 # ------------------------------------------------------------------
 # HTML / cursors / limits
 # ------------------------------------------------------------------

@@ -398,6 +398,43 @@ def eta_minutes_from_hhmm(now_hk: datetime, hhmm: str) -> Optional[int]:
     return max(0, int(round(diff / 60.0)))
 
 
+def _resolve_clock_time(value, *, future_only: bool, now_hk: datetime) -> Optional[datetime]:
+    """Resolve a user clock string to a tz-aware Hong Kong datetime.
+
+    Accepts ISO-8601 (``YYYY-MM-DD[T ]HH:MM[:SS][±HH:MM|Z]``) or a bare
+    ``HH:MM[:SS]`` clock. Naive values are assumed Hong Kong time
+    (``HK_TZ``); bare clocks resolve to the *next* occurrence of that time
+    (rolling to the next day when already past).
+
+    Returns ``None`` when the value cannot be parsed. When ``future_only``
+    is True, a resolved time in the past is clamped to ``now_hk`` (used for
+    ``start_at``); the caller decides whether a past resolved time is an
+    error for ``arrive_at``.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    s = value.strip()
+    dt = parse_iso(s)
+    if dt is not None:
+        dt = dt.replace(tzinfo=HK_TZ) if dt.tzinfo is None else dt.astimezone(HK_TZ)
+        if future_only and dt < now_hk:
+            return now_hk
+        return dt
+    m = re.match(r"^(\d{1,2}):([0-5]\d)(?::([0-5]\d))?$", s)
+    if not m:
+        return None
+    hh, mm, ss = int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)
+    if hh > 23:
+        return None
+    try:
+        cand = now_hk.replace(hour=hh, minute=mm, second=ss, microsecond=0)
+    except ValueError:
+        return None
+    if cand < now_hk:
+        cand = cand + timedelta(days=1)
+    return cand
+
+
 def strip_html(html: str) -> str:
     """Remove HTML tags from a string."""
     if not html or not isinstance(html, str):
@@ -1471,6 +1508,11 @@ class Valves(BaseModel):
     plan_max_runtime_s: float = 20.0
 
     plan_eta_call_limit: int = 220
+
+    # Arrive-by reverse solve: buffer subtracted from the target so modeled
+    # arrivals land inside it with margin. Coarse headways mean real-world
+    # arrivals are estimates, so this default should not be set to 0.
+    plan_arrival_buffer_min: int = 5
 
     # Transfer cap: HK can legitimately require 5+ transfers for remote NT points.
     # This caps the user-provided `max_transfers` (legs = transfers + 1).

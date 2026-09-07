@@ -1,9 +1,9 @@
 ## 1. Time resolution foundation
 
-- [ ] 1.1 Add `_resolve_clock_time(value, *, future_only, now_hk)` module helper in the helpers section: ISO-8601 `YYYY-MM-DD[T ]HH:MM[:SS][±HH:MM|Z]` or bare `HH:MM[:SS]`, naive → `HK_TZ`, bare clocks → next occurrence (roll to tomorrow when past), `None` return for unparseable input
-- [ ] 1.2 Add `plan_arrival_buffer_min` valve (default 5) to the base `Valves` model near the other planner knobs
-- [ ] 1.3 Add parse-table tests in `tests/test_unit_helpers.py`: naive ISO → +08:00, explicit offsets honored, bare clock today vs rolled-to-tomorrow, invalid strings, past-`arrive_at`/past-`start_at` handling via the tool layer contract
-- [ ] 1.4 Run suite; commit
+- [x] 1.1 Add `_resolve_clock_time(value, *, future_only, now_hk)` module helper in the helpers section: ISO-8601 `YYYY-MM-DD[T ]HH:MM[:SS][±HH:MM|Z]` or bare `HH:MM[:SS]`, naive → `HK_TZ`, bare clocks → next occurrence (roll to tomorrow when past), `None` return for unparseable input
+- [x] 1.2 Add `plan_arrival_buffer_min` valve (default 5) to the base `Valves` model near the other planner knobs
+- [x] 1.3 Add parse-table tests in `tests/test_unit_helpers.py`: naive ISO → +08:00, explicit offsets honored, bare clock today vs rolled-to-tomorrow, invalid strings, past-`arrive_at`/past-`start_at` handling via the tool layer contract
+- [x] 1.4 Run suite; commit
 
 ## 2. Planner reference anchoring
 
