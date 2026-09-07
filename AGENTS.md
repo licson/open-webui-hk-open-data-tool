@@ -9,7 +9,7 @@ Single-file Python module `hk-open-data-tool.py` (~5k lines) shipped as an **Ope
 ## Verify a change
 
 - Compile check: `python3 -m py_compile hk-open-data-tool.py`
-- Test suite: `python3 -m pytest` (offline, fully mocked HTTP; ~350 tests). Requires `pip install --break-system-packages pytest pytest-asyncio freezegun` once (pytest/pytest-asyncio/httpx/pydantic usually already present).
+- Test suite: `python3 -m pytest` (offline, fully mocked HTTP; ~350 tests). Requires `pip install --break-system-packages pytest pytest-asyncio freezegun` once (pytest/pytest-asyncio/httpx/pydantic usually already present). The MCP adapter tests additionally need `mcp>=2.2.0` (`pip install --break-system-packages mcp`, or use the repo venv: `.venv/bin/python -m pytest`).
 - Opt-in live-network smoke tests: `python3 -m pytest -m live` (deselected by default; skips without network).
 - No linters or typecheckers configured. Runtime env is Open WebUI's Python (needs `httpx`, `pydantic` v2 — note `Valves` uses `default_factory`/`Field`, i.e. pydantic v2 style).
 - This is real-world proctoring: `from __future__ import annotations` is required for the `Literal[...]`/forward-ref typing under pydantic v2 — keep it.
